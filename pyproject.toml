@@ -1,0 +1,116 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpaca"
+version = "1.0.0"
+description = "Automated Lens-modelling Pipeline for Accelerated TD Cosmography Analysis"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "ALPACA Team"},
+]
+keywords = [
+    "gravitational lensing",
+    "cosmology",
+    "time delay",
+    "bayesian inference",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "matplotlib>=3.5",
+    "astropy>=5.0",
+    "jax>=0.4",
+    "jaxlib>=0.4",
+    "numpyro>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+]
+starred = [
+    "starred-astro",
+]
+nautilus = [
+    "nautilus-sampler",
+]
+full = [
+    "alpaca[dev,starred,nautilus]",
+    "corner",
+    "arviz",
+]
+
+[project.urls]
+Homepage = "https://github.com/alpaca-team/alpaca"
+Documentation = "https://github.com/alpaca-team/alpaca"
+Repository = "https://github.com/alpaca-team/alpaca"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["alpaca*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "B905",  # zip without strict
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["alpaca"]
+
+[tool.coverage.run]
+source = ["alpaca"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
