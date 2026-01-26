@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="alpaca/alpaca_banner.png" alt="ALPACA Logo" width="100%">
+  <img src="alpaca/alpaca_logo.png" alt="ALPACA Logo" width="100%">
 </p>
 
 # ALPACA
