@@ -2,7 +2,6 @@
 
 **Automated Lens-modelling Pipeline for Accelerated TD Cosmography Analysis**
 
-[![CI](https://github.com/alpaca-team/alpaca/actions/workflows/ci.yml/badge.svg)](https://github.com/alpaca-team/alpaca/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -242,18 +241,6 @@ pytest tests/ -v
 pytest tests/ -v --cov=alpaca --cov-report=term-missing
 ```
 
-## Citation
-
-If you use ALPACA in your research, please cite:
-
-```bibtex
-@software{alpaca,
-  author = {ALPACA Team},
-  title = {ALPACA: Automated Lens-modelling Pipeline for Accelerated TD Cosmography Analysis},
-  url = {https://github.com/alpaca-team/alpaca},
-  year = {2024}
-}
-```
 
 ## License
 
@@ -266,4 +253,4 @@ ALPACA builds upon several excellent packages:
 - [JAX](https://github.com/google/jax) for automatic differentiation
 - [NumPyro](https://github.com/pyro-ppl/numpyro) for probabilistic programming
 - [Nautilus](https://github.com/johannesulf/nautilus) for nested sampling
-- [STARRED](https://github.com/music-for-a-sushi-restaurant/starred) for PSF reconstruction
+- [STARRED](https://gitlab.com/cosmograil/starred) for PSF reconstruction
