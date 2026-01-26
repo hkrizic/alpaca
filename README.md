@@ -40,7 +40,7 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
 ### From source
 
 ```bash
-git clone https://github.com/alpaca-team/alpaca.git
+git clone https://github.com/hkrizic/alpaca.git
 cd alpaca
 pip install -e ".[full]"
 ```
