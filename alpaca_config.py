@@ -15,8 +15,8 @@ import datetime
 BASE_DIR = "."  # Directory containing TDC and TDC_results folders
 RUNG = 2
 # Read CODE_ID and SEED from environment variables (set by SLURM array job)
-CODE_ID = int(os.environ.get("LENS_CODE", 1))
-SEED = int(os.environ.get("LENS_SEED", 119))
+CODE_ID = 1
+SEED = 119
 
 # =============================================================================
 # SOURCE MODEL SETTINGS
