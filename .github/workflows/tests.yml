@@ -22,8 +22,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install git+https://github.com/Herculens/herculens.git
           pip install -e ".[dev]"
 
       - name: Run tests
         run: |
           pytest tests/ -v --ignore=tests/test_integration.py
+
+The key addition is:
+pip install git+https://github.com/Herculens/herculens.git
+
+This installs herculens directly from GitHub before installing your package.
