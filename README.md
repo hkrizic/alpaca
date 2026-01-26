@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="alpaca/alpaca_banner.png" alt="ALPACA Logo" width="100%">
+</p>
+
 # ALPACA
 
 **Automated Lens-modelling Pipeline for Accelerated TD Cosmography Analysis**
