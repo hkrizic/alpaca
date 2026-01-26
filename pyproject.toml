@@ -38,6 +38,11 @@ dependencies = [
     "jax>=0.4",
     "jaxlib>=0.4",
     "numpyro>=0.12",
+    "jaxopt",
+    "optax",
+    "getdist",
+    "utax @ git+https://github.com/aymgal/utax",
+    "herculens @ git+https://github.com/Herculens/herculens.git",
 ]
 
 [project.optional-dependencies]
@@ -52,16 +57,19 @@ starred = [
 nautilus = [
     "nautilus-sampler",
 ]
+nifty = [
+    "nifty8",
+]
 full = [
-    "alpaca[dev,starred,nautilus]",
+    "alpaca[dev,starred,nautilus,nifty]",
     "corner",
     "arviz",
 ]
 
 [project.urls]
-Homepage = "https://github.com/alpaca-team/alpaca"
-Documentation = "https://github.com/alpaca-team/alpaca"
-Repository = "https://github.com/alpaca-team/alpaca"
+Homepage = "https://github.com/hkrizic/alpaca"
+Documentation = "https://github.com/hkrizic/alpaca"
+Repository = "https://github.com/hkrizic/alpaca"
 
 [tool.setuptools.packages.find]
 where = ["."]
