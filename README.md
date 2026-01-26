@@ -42,22 +42,6 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
 ```bash
 git clone https://github.com/alpaca-team/alpaca.git
 cd alpaca
-pip install -e .
-```
-
-### With optional dependencies
-
-```bash
-# For development (includes pytest, ruff)
-pip install -e ".[dev]"
-
-# For PSF reconstruction with STARRED
-pip install -e ".[starred]"
-
-# For Nautilus nested sampling
-pip install -e ".[nautilus]"
-
-# Full installation
 pip install -e ".[full]"
 ```
 
@@ -237,11 +221,8 @@ alpaca/
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests (might take a few minutes)
 pytest tests/ -v
-
-# Run with coverage
-pytest tests/ -v --cov=alpaca --cov-report=term-missing
 ```
 
 
