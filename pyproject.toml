@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpaca"
-version = "1.0.0"
+version = "0.1.0"
 description = "Automated Lens-modelling Pipeline for Accelerated TD Cosmography Analysis"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "ALPACA Team"},
+    {name = "Hrvoje Krizic"},
 ]
 keywords = [
     "gravitational lensing",
@@ -40,6 +40,7 @@ dependencies = [
     "numpyro>=0.12",
     "jaxopt",
     "optax",
+    "pandas",
     "getdist",
     "utax @ git+https://github.com/aymgal/utax",
     "herculens @ git+https://github.com/Herculens/herculens.git",
@@ -67,8 +68,6 @@ full = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hkrizic/alpaca"
-Documentation = "https://github.com/hkrizic/alpaca"
 Repository = "https://github.com/hkrizic/alpaca"
 
 [tool.setuptools.packages.find]
@@ -84,6 +83,12 @@ addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
+    "ignore::FutureWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "gpu: marks tests that require GPU",
 ]
 
 [tool.ruff]

@@ -1,131 +1,91 @@
-"""
-Test ALPACA utility functions.
-"""
+"""Tests for alpaca.utils module."""
 
+import sys
+import os
 import pytest
-import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+np = pytest.importorskip("numpy")
+pytest.importorskip("jax")
+pytest.importorskip("scipy")
 
 
-class TestPixelGrids:
-    """Test pixel grid creation utilities."""
+class TestImports:
+    """Verify public API is importable."""
 
-    def test_make_pixel_grids_basic(self, small_image):
-        """Test basic pixel grid creation."""
-        from alpaca.utils import make_pixel_grids
-
-        pix_scl = 0.08
-        result = make_pixel_grids(small_image, pix_scl)
-
-        # Should return 5 values: pixel_grid, ps_grid, xgrid, ygrid, pix_scl
-        assert len(result) == 5
-        pixel_grid, ps_grid, xgrid, ygrid, returned_pix_scl = result
-
-        assert xgrid.shape == small_image.shape
-        assert ygrid.shape == small_image.shape
-        assert returned_pix_scl == pix_scl
-
-    def test_make_pixel_grids_centered(self, small_image):
-        """Test pixel grids are centered at origin."""
-        from alpaca.utils import make_pixel_grids
-
-        pix_scl = 0.08
-        _, _, xgrid, ygrid, _ = make_pixel_grids(small_image, pix_scl)
-
-        npix = small_image.shape[0]
-        # Center should be near (0, 0)
-        center_x = xgrid[npix // 2, npix // 2]
-        center_y = ygrid[npix // 2, npix // 2]
-
-        assert abs(center_x) < pix_scl
-        assert abs(center_y) < pix_scl
-
-    def test_make_pixel_grids_scale(self, small_image):
-        """Test pixel grid scale is correct."""
-        from alpaca.utils import make_pixel_grids
-
-        pix_scl = 0.1
-        _, _, xgrid, _, _ = make_pixel_grids(small_image, pix_scl)
-
-        # Check spacing between pixels
-        dx = np.abs(xgrid[0, 1] - xgrid[0, 0])
-        assert np.isclose(dx, pix_scl, rtol=1e-5)
-
-
-class TestPointSourceDetection:
-    """Test point source detection utilities."""
-
-    def test_detect_point_sources_import(self):
-        """Test point source detection can be imported."""
-        from alpaca.utils import detect_point_sources
-        assert callable(detect_point_sources)
-
-    def test_detect_point_sources_basic(self, rng):
-        """Test basic point source detection."""
-        from alpaca.utils import detect_point_sources
-
-        # Create image with bright spots
-        img = rng.normal(0, 0.1, (64, 64))
-        # Add point sources at known locations (away from center which is masked)
-        img[15, 15] = 10.0
-        img[15, 48] = 8.0
-        img[48, 15] = 6.0
-        img[48, 48] = 4.0
-
-        # Create coordinate grids
-        pix_scl = 0.08
-        npix = 64
-        half = (npix - 1) / 2.0
-        x1d = (np.arange(npix) - half) * pix_scl
-        xgrid, ygrid = np.meshgrid(x1d, x1d)
-
-        result = detect_point_sources(
-            img, xgrid, ygrid,
-            n_sources=4,
-            lens_mask_radius=0.3,
-            min_sep=0.1,
+    def test_import_cosmology_functions(self):
+        from alpaca.utils import (
+            compute_D_dt,
+            predict_time_delay,
+            Ddt_2_H0,
+            Dd_2_H0,
+            parse_lens_info_file,
+            cast_ints_to_floats_in_dict,
         )
-
-        # Should return (peaks, x0s, y0s, peak_vals)
-        assert len(result) == 4
-        peaks, x0s, y0s, peak_vals = result
-        assert len(x0s) == 4
-        assert len(y0s) == 4
-        assert len(peak_vals) == 4
-
-
-class TestNoiseHandling:
-    """Test noise handling utilities."""
-
-    def test_boost_noise_import(self):
-        """Test boost noise function can be imported."""
-        from alpaca.utils import boost_noise_around_point_sources
-        assert callable(boost_noise_around_point_sources)
+        assert callable(compute_D_dt)
+        assert callable(predict_time_delay)
+        assert callable(Ddt_2_H0)
+        assert callable(Dd_2_H0)
+        assert callable(parse_lens_info_file)
+        assert callable(cast_ints_to_floats_in_dict)
 
 
-class TestMaskUtilities:
-    """Test mask creation utilities."""
+class TestCastIntsToFloats:
+    """Test the recursive int-to-float converter."""
 
-    def test_make_arc_mask_import(self):
-        """Test arc mask function can be imported."""
-        from alpaca.utils import make_arc_mask
-        assert callable(make_arc_mask)
+    def test_simple_int(self):
+        from alpaca.utils.cosmology import cast_ints_to_floats_in_dict
 
-    def test_make_arc_mask_basic(self):
-        """Test basic arc mask creation."""
-        from alpaca.utils import make_arc_mask
+        assert cast_ints_to_floats_in_dict(5) == 5.0
+        assert isinstance(cast_ints_to_floats_in_dict(5), float)
 
-        npix = 64
-        pix_scl = 0.08
-        half = (npix - 1) / 2.0
-        x1d = (np.arange(npix) - half) * pix_scl
-        xgrid, ygrid = np.meshgrid(x1d, x1d)
+    def test_float_passthrough(self):
+        from alpaca.utils.cosmology import cast_ints_to_floats_in_dict
 
-        mask = make_arc_mask(
-            xgrid, ygrid,
-            inner_radius=0.3,
-            outer_radius=1.5,
-        )
+        assert cast_ints_to_floats_in_dict(3.14) == 3.14
 
-        assert mask.shape == (npix, npix)
-        # Mask should have some True values (inside annulus)
-        assert np.sum(mask) > 0
+    def test_string_passthrough(self):
+        from alpaca.utils.cosmology import cast_ints_to_floats_in_dict
+
+        assert cast_ints_to_floats_in_dict("hello") == "hello"
+
+    def test_none_passthrough(self):
+        from alpaca.utils.cosmology import cast_ints_to_floats_in_dict
+
+        assert cast_ints_to_floats_in_dict(None) is None
+
+    def test_nested_dict(self):
+        from alpaca.utils.cosmology import cast_ints_to_floats_in_dict
+
+        data = {"a": 1, "b": {"c": 2, "d": 3.0}, "e": "text"}
+        result = cast_ints_to_floats_in_dict(data)
+        assert result["a"] == 1.0
+        assert isinstance(result["a"], float)
+        assert result["b"]["c"] == 2.0
+        assert isinstance(result["b"]["c"], float)
+        assert result["b"]["d"] == 3.0
+        assert result["e"] == "text"
+
+    def test_list(self):
+        from alpaca.utils.cosmology import cast_ints_to_floats_in_dict
+
+        result = cast_ints_to_floats_in_dict([1, 2, 3])
+        assert result == [1.0, 2.0, 3.0]
+        assert all(isinstance(x, float) for x in result)
+
+
+class TestIsBatchedPytree:
+    """Test is_batched_pytree utility."""
+
+    def test_unbatched(self):
+        from alpaca.utils.jax_helpers import is_batched_pytree
+
+        tree = {"a": np.array(1.0), "b": np.array(2.0)}
+        assert is_batched_pytree(tree) is False
+
+    def test_batched(self):
+        from alpaca.utils.jax_helpers import is_batched_pytree
+
+        tree = {"a": np.array([1.0, 2.0, 3.0]), "b": np.array([4.0, 5.0, 6.0])}
+        assert is_batched_pytree(tree) is True

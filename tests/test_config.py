@@ -1,208 +1,129 @@
-"""
-Test ALPACA configuration classes.
-"""
+"""Tests for alpaca.config dataclasses."""
 
 import pytest
-import tempfile
-import os
+
+from alpaca.config import (
+    PSFReconstructionConfig,
+    GradientDescentConfig,
+    SamplerConfig,
+    PlottingConfig,
+    CorrFieldConfig,
+    PipelineConfig,
+)
+
+
+class TestPSFReconstructionConfig:
+    """Tests for PSFReconstructionConfig."""
+
+    def test_defaults(self):
+        cfg = PSFReconstructionConfig()
+        assert cfg.n_iterations == 3
+        assert cfg.starred_cutout_size == 99
+        assert cfg.starred_supersampling_factor == 3
+        assert isinstance(cfg.run_multistart, bool)
+
+    def test_override(self):
+        cfg = PSFReconstructionConfig(n_iterations=5, starred_cutout_size=51)
+        assert cfg.n_iterations == 5
+        assert cfg.starred_cutout_size == 51
+
+
+class TestGradientDescentConfig:
+    """Tests for GradientDescentConfig."""
+
+    def test_defaults(self):
+        cfg = GradientDescentConfig()
+        assert cfg.n_starts_initial == 50
+        assert cfg.adam_steps_initial == 500
+        assert cfg.lbfgs_maxiter_initial == 600
+        assert cfg.adam_lr == 5e-3
+        assert cfg.random_seed == 73
+
+    def test_phases_exist(self):
+        cfg = GradientDescentConfig()
+        assert hasattr(cfg, "n_starts_initial")
+        assert hasattr(cfg, "n_top_for_refinement")
+        assert hasattr(cfg, "adam_steps_refinement")
+        assert hasattr(cfg, "lbfgs_maxiter_refinement")
+
+
+class TestSamplerConfig:
+    """Tests for SamplerConfig."""
+
+    def test_defaults(self):
+        cfg = SamplerConfig()
+        assert cfg.sampler == "default"
+        assert cfg.nuts_num_warmup == 1000
+        assert cfg.nautilus_n_live == 1000
+
+    def test_valid_sampler_values(self):
+        for val in ("nuts", "nautilus", "default"):
+            cfg = SamplerConfig(sampler=val)
+            assert cfg.sampler == val
+
+    def test_no_emcee_field(self):
+        """Verify emcee fields have been removed."""
+        cfg = SamplerConfig()
+        assert not hasattr(cfg, "emcee_n_walkers")
+        assert not hasattr(cfg, "emcee_n_steps")
+        assert not hasattr(cfg, "emcee_burnin_fraction")
+        assert not hasattr(cfg, "emcee_thin")
+
+
+class TestPlottingConfig:
+    """Tests for PlottingConfig."""
+
+    def test_defaults(self):
+        cfg = PlottingConfig()
+        assert cfg.save_plots is True
+        assert cfg.dpi == 300
+        assert cfg.plot_format == "png"
+
+
+class TestCorrFieldConfig:
+    """Tests for CorrFieldConfig."""
+
+    def test_defaults(self):
+        cfg = CorrFieldConfig()
+        assert cfg.num_pixels == 80
+        assert cfg.exponentiate is True
+        assert cfg.interpolation_type == "fast_bilinear"
+
+    def test_tuples(self):
+        cfg = CorrFieldConfig()
+        assert isinstance(cfg.loglogavgslope, tuple)
+        assert len(cfg.loglogavgslope) == 2
+        assert isinstance(cfg.fluctuations, tuple)
 
 
 class TestPipelineConfig:
-    """Test PipelineConfig class."""
+    """Tests for PipelineConfig."""
 
-    def test_config_creation_defaults(self):
-        """Test basic config creation with defaults."""
-        from alpaca import PipelineConfig
+    def test_defaults(self):
+        cfg = PipelineConfig()
+        assert cfg.rung == 2
+        assert cfg.code_id == 1
+        assert cfg.seed == 120
+        assert cfg.run_sampling is True
 
-        config = PipelineConfig()
-        assert config.rung == 2
-        assert config.pix_scl == 0.08
-        assert config.supersampling_factor == 5
+    def test_nested_configs(self):
+        cfg = PipelineConfig()
+        assert isinstance(cfg.psf_config, PSFReconstructionConfig)
+        assert isinstance(cfg.gradient_descent_config, GradientDescentConfig)
+        assert isinstance(cfg.sampler_config, SamplerConfig)
+        assert isinstance(cfg.plotting_config, PlottingConfig)
+        assert isinstance(cfg.corr_field_config, CorrFieldConfig)
 
-    def test_config_custom_values(self):
-        """Test config with custom values."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            rung=3,
-            code_id=2,
-            seed=123,
-            pix_scl=0.05,
+    def test_override_nested(self):
+        cfg = PipelineConfig(
+            psf_config=PSFReconstructionConfig(n_iterations=7),
+            sampler_config=SamplerConfig(sampler="nuts"),
         )
-        assert config.rung == 3
-        assert config.code_id == 2
-        assert config.seed == 123
-        assert config.pix_scl == 0.05
+        assert cfg.psf_config.n_iterations == 7
+        assert cfg.sampler_config.sampler == "nuts"
 
-    def test_config_shapelets_settings(self):
-        """Test shapelets configuration."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            use_source_shapelets=True,
-            use_corr_fields=False,
-            shapelets_n_max=8,
-            shapelets_beta_min=0.01,
-            shapelets_beta_max=0.5,
-        )
-        assert config.use_source_shapelets is True
-        assert config.use_corr_fields is False
-        assert config.shapelets_n_max == 8
-
-    def test_config_corrfield_settings(self):
-        """Test correlated field configuration."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            use_source_shapelets=False,
-            use_corr_fields=True,
-            corr_field_num_pixels=100,
-        )
-        assert config.use_corr_fields is True
-        assert config.use_source_shapelets is False
-        assert config.corr_field_num_pixels == 100
-
-    def test_config_time_delay_settings(self):
-        """Test time delay configuration."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            use_time_delays=True,
-            measured_delays=(10.0, 20.0, 30.0),
-            delay_errors=(1.0, 1.5, 2.0),
-        )
-        assert config.use_time_delays is True
-        assert len(config.measured_delays) == 3
-
-    def test_config_gradient_descent_settings(self):
-        """Test gradient descent configuration."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            n_starts_initial=100,
-            adam_steps_initial=1000,
-            adam_lr=1e-3,
-            lbfgs_maxiter_initial=500,
-        )
-        assert config.n_starts_initial == 100
-        assert config.adam_steps_initial == 1000
-        assert config.adam_lr == 1e-3
-
-    def test_config_nuts_settings(self):
-        """Test NUTS configuration."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            nuts_num_warmup=500,
-            nuts_num_samples=1000,
-            nuts_target_accept=0.85,
-            nuts_max_tree_depth=12,
-            nuts_chain_method="vectorized",
-        )
-        assert config.nuts_num_warmup == 500
-        assert config.nuts_num_samples == 1000
-        assert config.nuts_target_accept == 0.85
-        assert config.nuts_max_tree_depth == 12
-        assert config.nuts_chain_method == "vectorized"
-
-    def test_config_nautilus_settings(self):
-        """Test Nautilus configuration."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            nautilus_n_live=500,
-            nautilus_n_batch=32,
-            nautilus_pool=4,
-            nautilus_n_posterior_samples=1000,
-        )
-        assert config.nautilus_n_live == 500
-        assert config.nautilus_n_batch == 32
-        assert config.nautilus_pool == 4
-        assert config.nautilus_n_posterior_samples == 1000
-
-    def test_config_validation_both_source_models(self):
-        """Test validation fails when both source models enabled."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            use_source_shapelets=True,
-            use_corr_fields=True,
-        )
-        with pytest.raises(ValueError, match="Cannot use both"):
-            config.validate()
-
-    def test_config_validation_no_source_model(self):
-        """Test validation fails when no source model enabled."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            use_source_shapelets=False,
-            use_corr_fields=False,
-        )
-        with pytest.raises(ValueError, match="Must enable"):
-            config.validate()
-
-    def test_config_validation_success(self):
-        """Test validation succeeds with valid config."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            use_source_shapelets=True,
-            use_corr_fields=False,
-        )
-        # Should not raise
-        config.validate()
-
-    def test_config_to_dict(self):
-        """Test config to_dict method."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(rung=3, seed=456)
-        d = config.to_dict()
-        assert isinstance(d, dict)
-        assert d["rung"] == 3
-        assert d["seed"] == 456
-
-    def test_config_save_load(self):
-        """Test config save and load."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            rung=3,
-            seed=789,
-            pix_scl=0.1,
-            use_source_shapelets=True,
-            use_corr_fields=False,
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "config.json")
-            config.save(path)
-
-            # Load and verify
-            loaded = PipelineConfig.load(path)
-            assert loaded.rung == 3
-            assert loaded.seed == 789
-            assert loaded.pix_scl == 0.1
-            assert loaded.use_source_shapelets is True
-
-    def test_config_psf_reconstruction_settings(self):
-        """Test PSF reconstruction configuration."""
-        from alpaca import PipelineConfig
-
-        config = PipelineConfig(
-            use_psf_reconstruction=True,
-            psf_reconstruction_iterations=2,
-            psf_cutout_size=99,
-            psf_supersampling_factor=3,
-            psf_mask_other_peaks=True,
-            psf_mask_radius=8,
-            psf_rotation_mode="180",
-        )
-        assert config.use_psf_reconstruction is True
-        assert config.psf_reconstruction_iterations == 2
-        assert config.psf_cutout_size == 99
-        assert config.psf_supersampling_factor == 3
-        assert config.psf_mask_other_peaks is True
-        assert config.psf_mask_radius == 8
-        assert config.psf_rotation_mode == "180"
+    def test_source_model_fields(self):
+        cfg = PipelineConfig()
+        assert cfg.use_source_shapelets is True
+        assert cfg.use_corr_fields is False
+        assert cfg.shapelets_n_max == 6

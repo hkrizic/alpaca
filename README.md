@@ -54,76 +54,125 @@ pip install -e ".[full]"
 
 ## Quick Start
 
+### 1. Configure the pipeline
+
+Edit `run_config.py` to set your data paths, source model, sampler, and pipeline phases:
+
 ```python
-from alpaca import PipelineConfig
-from alpaca.models import setup_lens_system
-from alpaca.inference import run_gradient_descent, run_nuts
+# run_config.py (excerpt)
 
-# Configure the pipeline
-config = PipelineConfig(
-    base_path="/path/to/data",
-    rung=2,
-    code_id=1,
-    use_source_shapelets=True,
-    shapelets_n_max=6,
-    use_time_delays=True,
-)
-config.validate()
+BASE_DIR = "."
+RUNG = 2
+CODE_ID = 1
+SEED = 120
 
-# Set up the lens system
-setup = setup_lens_system(config)
+USE_SHAPELETS = True        # Shapelets source model
+SHAPELETS_N_MAX = 6
 
-# Run gradient descent to find MAP estimate
-gd_results = run_gradient_descent(
-    setup["prob_model"],
-    n_starts=50,
-    verbose=True,
-)
+SAMPLER = "nuts"            # "nuts", "nautilus", or "default"
 
-# Run NUTS sampling for posterior inference
-nuts_results = run_nuts(
-    setup["prob_model"],
-    best_params=gd_results["best_params"],
-    num_warmup=1000,
-    num_samples=2000,
-)
+RUN_PSF_RECONSTRUCTION = False
+RUN_MULTISTART = True
+RUN_SAMPLING = True
+```
+
+The `load_config()` function at the bottom of `run_config.py` builds a `PipelineConfig` from these settings.
+
+### 2. Run the pipeline
+
+```bash
+python run_alpaca.py
+```
+
+Or submit to a SLURM cluster:
+
+```bash
+sbatch run_alpaca.sh
+```
+
+The pipeline executes three phases in sequence:
+
+1. **PSF Reconstruction** -- Iterative PSF estimation using STARRED.
+2. **Gradient Descent Optimization** -- Multi-start MAP estimation with Adam + L-BFGS.
+3. **Posterior Sampling** -- Bayesian inference via NUTS or Nautilus.
+
+### 3. Use the pipeline programmatically
+
+```python
+from alpaca.config import PipelineConfig
+from alpaca.pipeline import run_pipeline, quick_pipeline, load_pipeline_results
+
+# Run the full pipeline with a config object
+results = run_pipeline(config=config, verbose=True)
+
+# Or load previously saved results
+results = load_pipeline_results(output_dir)
 ```
 
 ## Configuration
 
-ALPACA uses a dataclass-based configuration system:
+ALPACA uses a dataclass-based configuration system defined in `alpaca/config.py`. The user-facing settings live in `run_config.py` as plain Python variables:
 
 ```python
-from alpaca import PipelineConfig
+from run_config import load_config
 
-config = PipelineConfig(
-    # Data settings
-    base_path="/path/to/data",
-    rung=2,
-    code_id=1,
+config = load_config()  # Builds a PipelineConfig from run_config.py settings
+```
 
-    # Source model (choose one)
-    use_source_shapelets=True,   # Shapelets decomposition
-    use_corr_fields=False,       # OR Correlated Fields
+Or build a `PipelineConfig` directly:
 
-    # Shapelets settings
-    shapelets_n_max=6,
-    shapelets_beta_min=0.02,
-    shapelets_beta_max=0.6,
-
-    # Likelihood terms
-    use_time_delays=True,
-    use_rayshoot_consistency=False,
-
-    # Inference settings
-    n_starts_initial=50,
-    nuts_num_warmup=1000,
-    nuts_num_samples=2000,
+```python
+from alpaca.config import (
+    PipelineConfig,
+    PSFReconstructionConfig,
+    GradientDescentConfig,
+    SamplerConfig,
+    PlottingConfig,
+    CorrFieldConfig,
 )
 
-# Save/load configuration
-config.save("config.json")
-loaded_config = PipelineConfig.load("config.json")
+config = PipelineConfig(
+    base_dir="/path/to/data",
+    rung=2,
+    code_id=1,
+    seed=120,
+
+    # Source model (choose one)
+    use_source_shapelets=True,
+    shapelets_n_max=6,
+
+    # Likelihood terms
+    use_rayshoot_consistency=True,
+    rayshoot_consistency_sigma=0.0002,
+    use_rayshoot_systematic_error=True,
+
+    # Phase toggles
+    run_psf_reconstruction=False,
+    run_multistart=True,
+    run_sampling=True,
+
+    # Phase configurations
+    psf_config=PSFReconstructionConfig(
+        n_iterations=4,
+        multistart_starts_per_iteration=20,
+    ),
+    gradient_descent_config=GradientDescentConfig(
+        n_starts_initial=50,
+        adam_steps_initial=500,
+        lbfgs_maxiter_initial=600,
+        use_time_delays=True,
+    ),
+    sampler_config=SamplerConfig(
+        sampler="nuts",
+        use_time_delays=True,
+        nuts_num_warmup=3000,
+        nuts_num_samples=5000,
+    ),
+    plotting_config=PlottingConfig(
+        plot_corner=True,
+        plot_chains=True,
+    ),
+)
 ```
 
 ## Inference Methods
@@ -133,7 +182,7 @@ loaded_config = PipelineConfig.load("config.json")
 Multi-start optimization with Adam pre-conditioning and L-BFGS-B refinement:
 
 ```python
-from alpaca.inference import run_gradient_descent
+from alpaca.sampler.gradient_descent import run_gradient_descent
 
 results = run_gradient_descent(
     prob_model,
@@ -149,14 +198,13 @@ best_params = results["best_params"]
 Full posterior sampling with the No-U-Turn Sampler:
 
 ```python
-from alpaca.inference import run_nuts
+from alpaca.sampler.nuts import run_nuts_numpyro
 
-results = run_nuts(
+results = run_nuts_numpyro(
     prob_model,
     best_params=best_params,  # Initialize near MAP
-    num_warmup=1000,
-    num_samples=2000,
-    num_chains=4,
+    num_warmup=3000,
+    num_samples=5000,
 )
 samples = results["samples"]
 ```
@@ -166,7 +214,7 @@ samples = results["samples"]
 Evidence estimation and posterior sampling:
 
 ```python
-from alpaca.inference import run_nautilus
+from alpaca.sampler.nautilus import run_nautilus
 
 results = run_nautilus(
     prob_model,
@@ -206,25 +254,75 @@ new_psf = reconstruct_PSF(
 ## Project Structure
 
 ```
-alpaca/
-├── data/           # Data loading utilities
-├── models/         # Lens models and probabilistic models
-├── likelihood/     # Likelihood functions
-├── inference/      # Inference backends (gradient descent, NUTS, Nautilus)
-├── psf/            # PSF reconstruction
-├── utils/          # Utility functions
-├── plotting/       # Visualization tools
-├── benchmarking/   # Timing and benchmarking utilities
-└── output/         # Output and diagnostics
+.
+├── run_alpaca.py              # Entry point: runs the pipeline and explores results
+├── run_config.py              # User-editable configuration (edit this, then run)
+├── run_alpaca.sh              # SLURM submission script for HPC clusters
+├── tests/                     # Test suite (pytest)
+│
+└── alpaca/
+    ├── __init__.py
+    ├── config.py              # Configuration dataclasses (PipelineConfig, etc.)
+    │
+    ├── pipeline/              # Pipeline orchestration
+    │   ├── __init__.py        #   re-exports: run_pipeline, quick_pipeline, load_pipeline_results
+    │   ├── runner.py          #   main pipeline runner
+    │   ├── io.py              #   output directory setup, FITS/JSON serialization
+    │   ├── setup.py           #   model building, point-source matching, time-delay loading
+    │   └── stages/
+    │       ├── sampling.py    #   NUTS and Nautilus sampling stages
+    │       └── plotting.py    #   posterior plot generation stage
+    │
+    ├── data/                  # Data loading and preprocessing
+    │   ├── loader.py          #   FITS data loading
+    │   ├── setup.py           #   high-level lens setup (setup_tdlmc_lens)
+    │   ├── grids.py           #   pixel grid construction
+    │   ├── masks.py           #   source arc masks (annular and custom)
+    │   ├── detection.py       #   point-source image detection
+    │   └── noise.py           #   noise boosting around point sources
+    │
+    ├── models/                # Probabilistic lens model
+    │   └── prob_model.py
+    │
+    ├── sampler/               # Optimization and sampling
+    │   ├── constants.py       #   physical constants (D_dt bounds, c)
+    │   ├── priors.py          #   truncated-normal and bounded priors
+    │   ├── losses.py          #   time-delay and ray-shooting loss functions
+    │   ├── utils.py           #   RNG, environment info, conversions
+    │   ├── likelihood.py      #   likelihood construction
+    │   ├── gradient_descent/
+    │   │   ├── optimizer.py   #   Adam + L-BFGS multi-start optimization
+    │   │   └── bic.py         #   Bayesian Information Criterion
+    │   ├── nautilus/
+    │   │   ├── prior.py       #   Nautilus prior mapping
+    │   │   ├── sampler.py     #   Nautilus nested sampler wrapper
+    │   │   └── posterior.py   #   posterior extraction from Nautilus
+    │   └── nuts/
+    │       ├── sampler.py     #   NumPyro NUTS wrapper
+    │       └── posterior.py   #   posterior extraction from NUTS
+    │
+    ├── plotting/              # Visualization
+    │   ├── model_plots.py     #   best-fit model and residual maps
+    │   ├── posterior_plots.py #   corner plots and posterior analysis
+    │   ├── diagnostics.py     #   optimization and chain diagnostics
+    │   └── benchmarking.py    #   timing and performance plots
+    │
+    ├── psf/                   # PSF reconstruction (STARRED)
+    │   ├── reconstruction.py  #   main PSF reconstruction driver
+    │   ├── iterations.py      #   iterative refinement loop
+    │   ├── isolation.py       #   star isolation and cutout extraction
+    │   └── utils.py           #   PSF helper functions
+    │
+    └── utils/                 # Shared utilities
+        ├── cosmology.py       #   D_dt, time-delay prediction, H0 conversions
+        └── jax_helpers.py     #   JAX pytree utilities
 ```
 
 ## Testing
 
 ```bash
-# Run all tests (might take a few minutes)
 pytest tests/ -v
 ```
-
 
 ## License
 
@@ -233,6 +331,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 ALPACA builds upon several excellent packages:
+
 - [Herculens](https://github.com/Herculens/herculens) for differentiable lens modeling
 - [JAX](https://github.com/google/jax) for automatic differentiation
 - [NumPyro](https://github.com/pyro-ppl/numpyro) for probabilistic programming
