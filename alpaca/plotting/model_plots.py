@@ -103,11 +103,10 @@ def nautilus_mean_model_plot(
     prior,
     loglike,
     paramdict_to_kwargs,
-    rung: int,
-    code_id: int,
-    seed: int,
+    checkpoint_path: str,
     number_live: int,
-    out_dir: str | None = None,
+    out_dir: str,
+    tag: str = "nautilus_mean_model",
 ):
     """Plot Nautilus posterior mean model and residuals.
 
@@ -119,30 +118,17 @@ def nautilus_mean_model_plot(
         prior: Nautilus prior object.
         loglike: Log-likelihood function.
         paramdict_to_kwargs: Function to convert parameter dict to kwargs_lens.
-        rung: TDLMC rung number.
-        code_id: Code ID within the rung.
-        seed: Random seed identifying the system.
+        checkpoint_path: Path to the Nautilus checkpoint file.
         number_live: Number of live points used.
-        out_dir: Output directory. If None, uses default path.
+        out_dir: Output directory (required).
+        tag: Filename prefix for saved plots.
     """
     from alpaca.sampler.nautilus import load_posterior_from_checkpoint
 
-    if out_dir is None:
-        out_dir = os.path.join(
-            "nautilus_output",
-            f"rung{rung}",
-            f"code{code_id}",
-            f"f160w-seed{seed}",
-        )
     os.makedirs(out_dir, exist_ok=True)
 
-    ckpt = os.path.join(
-        "nautilus_output",
-        f"run_checkpoint_rung{rung}_seed{seed}_{number_live}.hdf5",
-    )
-
     sampler, points, log_w, log_l = load_posterior_from_checkpoint(
-        prior, loglike, n_live=number_live, filepath=ckpt
+        prior, loglike, n_live=number_live, filepath=checkpoint_path
     )
     weights = np.exp(log_w)
     cols = sampler.prior.keys
@@ -162,10 +148,7 @@ def nautilus_mean_model_plot(
         show_source=True,
         kwargs_grid_source=dict(pixel_scale_factor=1),
     )
-    out_summary = os.path.join(
-        out_dir,
-        f"nautilus_mean_model_summary_rung{rung}_seed{seed}_nlive{number_live}.png",
-    )
+    out_summary = os.path.join(out_dir, f"{tag}_summary.png")
     plt.savefig(out_summary, dpi=200, bbox_inches="tight")
     plt.show()
     print("Saved mean-model summary to:", out_summary)
@@ -187,10 +170,7 @@ def nautilus_mean_model_plot(
     plt.colorbar(im2, ax=ax[2], fraction=0.046, pad=0.04)
 
     plt.tight_layout()
-    out_diag = os.path.join(
-        out_dir,
-        f"nautilus_mean_model_diagnostics_rung{rung}_seed{seed}_nlive{number_live}.png",
-    )
+    out_diag = os.path.join(out_dir, f"{tag}_diagnostics.png")
     plt.savefig(out_diag, dpi=200, bbox_inches="tight")
     plt.show()
     print("Saved NAUTILUS diagnostics to:", out_diag)

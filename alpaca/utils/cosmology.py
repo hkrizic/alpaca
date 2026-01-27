@@ -1,20 +1,15 @@
 """
-TDC Utility Functions
+Cosmology utility functions.
 
-Utilities for the Time Delay Challenge (TDC) lens modeling workflow. Provides
-parsing of TDC lens info files, cosmological distance calculations, time delay
-predictions, and H0 conversions.
+Utilities for strong lens modeling workflows. Provides cosmological distance
+calculations, time delay predictions, and H0 conversions.
 
 Main components:
-    - parse_lens_info_file: Parse evil/good team lens info text files
     - compute_D_dt / predict_time_delay: Cosmological time delay calculations
     - Ddt_2_H0 / Dd_2_H0: Convert distances to H0 constraints
 
 Author: martin-millon, hkrizic
 """
-
-import ast
-import re
 
 import astropy.units as u
 import jax
@@ -50,176 +45,6 @@ def cast_ints_to_floats_in_dict(d):
         return None
     else:
         raise TypeError(f"Unsupported type: {type(d)} with value: {d}")
-
-
-def parse_lens_info_file(filepath):
-    """Parse a TDC 'evil team' lens info text file.
-
-    Extracts cosmology, redshifts, lens/source light parameters, AGN positions,
-    time delays, and other metadata from the structured text format used in the
-    Time Delay Challenge.
-
-    Args:
-        filepath: Path to the lens info text file.
-
-    Returns:
-        Dictionary containing parsed lens system parameters including:
-            - cosmology: H0, Om values
-            - redshifts: lens and source redshifts
-            - lens_mass_model: SPEMD and shear parameters
-            - time_delays_BCD_minus_A: measured time delays
-            - AGN_light: source and image plane positions/amplitudes
-    """
-    def extract_value(pattern, text, eval_type=float, default=None):
-        match = re.search(pattern, text)
-        if match:
-            try:
-                return eval_type(match.group(1))
-            except Exception:
-                return default
-        return default
-
-    with open(filepath) as f:
-        content = f.read()
-
-    lens_data = {
-        "units": {
-            "angle": "arcseconds",
-            "phi_G": "radians (from x-axis, anticlockwise)"
-        },
-        "cosmology": {
-            "model": "FlatLambdaCDM",
-            "Om": extract_value(r"Om\s*=\s*([0-9.]+)", content),
-            "H0": extract_value(r"H0:\s*([0-9.]+)", content)
-        },
-        "pixel_size": {
-            "before_drizzle": extract_value(r"Pixel size is ([0-9.]+)''", content),
-            "after_drizzle": extract_value(r"and ([0-9.]+)'' after drizzle", content)
-        },
-        "time_delay_distance": extract_value(r"Time delay distance:.*?([0-9.]+)Mpc", content),
-        "time_delays_BCD_minus_A": ast.literal_eval(extract_value(r"Time delay of BCD - A\s*:\s*array\((.*?)\)", content, str, "[]")),
-        "zeropoint_AB": extract_value(r"Zeropoint of filter.*?:\s*([0-9.]+)", content),
-        "redshifts": {"lens": None, "source": None},
-        "lens_mass_model": {"SPEMD": None, "shear": None},
-        "lens_light": None,
-        "source_light": {
-            "host_name": None,
-            "center_pos": None,
-            "mag": None,
-            "R_eff": None
-        },
-        "AGN_light": {"source_plane": {}, "image_plane": {}},
-        "magnitudes": {},
-        "velocity_dispersion": extract_value(r"Measured velocity dispersion.*?:\s*([0-9.]+)", content),
-        "kappa_ext": extract_value(r"kappa_ext.*?:\s*([0-9.]+)", content),
-        "time_delays_with_kappa_ext": ast.literal_eval(extract_value(r"Time delay with external kappa.*?:\s*array\((.*?)\)", content, str, "[]"))
-    }
-
-    redshift_match = re.search(r"Lens/Source redshift:\s*\[([0-9.,\s]+)\]", content)
-    if redshift_match:
-        z_l, z_s = map(float, redshift_match.group(1).split(","))
-        lens_data["redshifts"]["lens"] = z_l
-        lens_data["redshifts"]["source"] = z_s
-
-    match = re.search(r"SPEMD:(\{.*?\})", content, re.DOTALL)
-    if match:
-        lens_data["lens_mass_model"]["SPEMD"] = ast.literal_eval(match.group(1))
-
-    match = re.search(r"Shear:\s*\((\{.*?\}),\s*(\{.*?\})\)", content)
-    if match:
-        shear = ast.literal_eval(match.group(1))
-        lens_data["lens_mass_model"]["shear"] = shear
-
-    match = re.search(r"Lens light:\s*\n\s*(\{.*?\})", content, re.DOTALL)
-    if match:
-        lens_data["lens_light"] = ast.literal_eval(match.group(1))
-
-    match = re.search(r"Host galaxy name:\s*(\S+)\s*CenterPos:\s*array\((.*?)\)", content)
-    if match:
-        lens_data["source_light"]["host_name"] = match.group(1)
-        lens_data["source_light"]["center_pos"] = ast.literal_eval(match.group(2))
-
-    lens_data["source_light"]["mag"] = extract_value(r"Host mag:\s*([0-9.]+)", content)
-    lens_data["source_light"]["R_eff"] = extract_value(r"Host R_eff:\s*([0-9.]+)", content)
-
-    lens_data["AGN_light"]["source_plane"]["position"] = list(map(float, re.findall(r"AGN position in source plane:\s*([0-9.\-]+),\s*([0-9.\-]+)", content)[0]))
-    lens_data["AGN_light"]["source_plane"]["amplitude"] = extract_value(r"AGN amplitude in source plane:\s*([0-9.]+)", content)
-
-    match = re.search(r"AGN position in image plane:\s*x:\s*array\((.*?)\)\s*y:\s*array\((.*?)\)", content, re.DOTALL)
-    if match:
-        lens_data["AGN_light"]["image_plane"]["x"] = ast.literal_eval(match.group(1))
-        lens_data["AGN_light"]["image_plane"]["y"] = ast.literal_eval(match.group(2))
-
-    match = re.search(r"AGN amplitude in image plane:\s*array\((.*?)\)", content)
-    if match:
-        lens_data["AGN_light"]["image_plane"]["amplitude"] = ast.literal_eval(match.group(1))
-
-    lens_data["magnitudes"]["host_galaxy_image_plane"] = extract_value(r"Host galaxy mag in the image plane:\s*([0-9.]+)", content)
-    lens_data["magnitudes"]["AGN_total_image_plane"] = extract_value(r"AGN total mag in the image plane:\s*([0-9.]+)", content)
-
-    return cast_ints_to_floats_in_dict(lens_data)
-
-
-def parse_good_team_lens_info_file(filepath):
-    """Parse a TDC 'good team' lens info text file.
-
-    Similar to parse_lens_info_file but for the 'good team' format which
-    includes observational uncertainties on time delays and velocity dispersion.
-
-    Args:
-        filepath: Path to the good team lens info text file.
-
-    Returns:
-        Dictionary containing parsed parameters with error estimates.
-    """
-    with open(filepath) as f:
-        content = f.read()
-
-    def extract_value(pattern, eval_type=float, default=None):
-        match = re.search(pattern, content)
-        if match:
-            try:
-                return eval_type(match.group(1))
-            except Exception:
-                return default
-        return default
-
-    lens_data = {
-        "pixel_size": {
-            "before_drizzle": extract_value(r"Pixel size is ([0-9.]+)''"),
-            "after_drizzle": extract_value(r"and ([0-9.]+)'' after drizzle")
-        },
-        "zeropoint_AB": extract_value(r"Zeropoint of filter \(AB system\):\s*([0-9.]+)"),
-        "redshifts": {"lens": None, "source": None},
-        "external_convergence": {"kappa_ext": None, "kappa_ext_error": None},
-        "velocity_dispersion": {"value": None, "error": None},
-        "time_delays_BCD_minus_A": {"values": None, "errors": None}
-    }
-
-    match = re.search(r"Lens/Source redshift:\s*\[([0-9.,\s]+)\]", content)
-    if match:
-        z_lens, z_source = map(float, match.group(1).split(","))
-        lens_data["redshifts"]["lens"] = z_lens
-        lens_data["redshifts"]["source"] = z_source
-
-    match = re.search(r"External Convergence: Kext=\s*([-\d.]+)\s*\+/-\s*([0-9.]+)", content)
-    if match:
-        lens_data["external_convergence"]["kappa_ext"] = float(match.group(1))
-        lens_data["external_convergence"]["kappa_ext_error"] = float(match.group(2))
-
-    match = re.search(r"Measured velocity dispersion:\s*([0-9.]+)km/s, error level:\s*([0-9.]+)km/s", content)
-    if match:
-        lens_data["velocity_dispersion"]["value"] = float(match.group(1))
-        lens_data["velocity_dispersion"]["error"] = float(match.group(2))
-
-    match = re.search(r"Time delay of BCD - A\s*:\s*array\((.*?)\)days,\s*error level:\s*array\((.*?)\)days", content)
-    if match:
-        delays = ast.literal_eval(f"[{match.group(1)}]")
-        delay_errors = ast.literal_eval(f"[{match.group(2)}]")
-        lens_data["time_delays_BCD_minus_A"]["values"] = delays[0]
-        lens_data["time_delays_BCD_minus_A"]["errors"] = delay_errors[0]
-
-    return lens_data
 
 
 def compute_D_dt(z_lens, z_source, cosmology):

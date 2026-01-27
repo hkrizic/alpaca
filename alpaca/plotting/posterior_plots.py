@@ -19,8 +19,6 @@ import numpy as np
 import pandas as pd
 from getdist import MCSamples, plots
 
-from alpaca.utils.cosmology import parse_lens_info_file
-
 # Optional imports for corner plotting backends
 try:
     from getdist import MCSamples as _MCSamples
@@ -41,27 +39,26 @@ except ImportError:
 def nautilus_corner_plot(
     prior,
     loglike,
-    base: str,
-    rung: int,
-    code_id: int,
-    seed: int,
+    checkpoint_path: str,
     number_live: int,
+    out_dir: str,
     params_to_corner: list[str] | None = None,
-    out_dir: str | None = None,
+    truth_values: dict[str, float] | None = None,
+    tag: str = "corner_nautilus",
     rel_error: bool = False,
 ):
-    """Create GetDist corner plot from Nautilus posterior with TDLMC truth markers.
+    """Create GetDist corner plot from Nautilus posterior with optional truth markers.
 
     Args:
         prior: Nautilus prior object from build_nautilus_prior_and_loglike.
         loglike: Log-likelihood function.
-        base: Base directory for TDLMC data.
-        rung: TDLMC rung number (0, 1, or 2).
-        code_id: Code ID within the rung.
-        seed: Random seed identifying the system.
+        checkpoint_path: Path to the Nautilus checkpoint file.
         number_live: Number of live points used in Nautilus run.
+        out_dir: Output directory (required).
         params_to_corner: Parameter names to include. If None, uses defaults.
-        out_dir: Output directory. If None, uses default nautilus_output path.
+        truth_values: Optional dict mapping parameter names to true values
+            for plotting truth markers and error annotations.
+        tag: Filename prefix for the saved plot.
         rel_error: If True, show relative error instead of absolute in annotations.
     """
     from alpaca.sampler.nautilus import load_posterior_from_checkpoint
@@ -78,22 +75,10 @@ def nautilus_corner_plot(
             "light_e2_L",
         ]
 
-    if out_dir is None:
-        out_dir = os.path.join(
-            "nautilus_output",
-            f"rung{rung}",
-            f"code{code_id}",
-            f"f160w-seed{seed}",
-        )
     os.makedirs(out_dir, exist_ok=True)
 
-    ckpt = os.path.join(
-        "nautilus_output",
-        f"run_checkpoint_rung{rung}_seed{seed}_{number_live}.hdf5",
-    )
-
     sampler, points, log_w, log_l = load_posterior_from_checkpoint(
-        prior, loglike, n_live=number_live, filepath=ckpt
+        prior, loglike, n_live=number_live, filepath=checkpoint_path
     )
     weights = np.exp(log_w)
     df = pd.DataFrame(points, columns=sampler.prior.keys)
@@ -102,45 +87,10 @@ def nautilus_corner_plot(
     samples_list = [df[p].to_numpy() for p in available]
     names = available
 
-    code = f"code{code_id}"
-    truth_file = os.path.join(
-        base,
-        f"TDC/rung{rung}_open_box/{code}/f160w-seed{seed}/lens_all_info.txt",
-    )
-    lens_info = parse_lens_info_file(truth_file)
-
-    def _phi_to_rad(phi):
-        return np.deg2rad(phi) if np.abs(phi) > 2 * np.pi else float(phi)
-
-    def _e1e2_from_q_phi(q, phi):
-        e = (1 - q) / (1 + q)
-        return e * np.cos(2 * phi), e * np.sin(2 * phi)
-
-    thetaE_true = lens_info["lens_mass_model"]["SPEMD"]["theta_E"]
-    gamma_true = lens_info["lens_mass_model"]["SPEMD"]["gamma"]
-    q_mass = lens_info["lens_mass_model"]["SPEMD"]["q"]
-    phi_mass = _phi_to_rad(
-        lens_info["lens_mass_model"]["SPEMD"].get("phi_G", 0.0)
-    )
-    e1_mass_true, e2_mass_true = _e1e2_from_q_phi(q_mass, phi_mass)
-
-    q_light = lens_info["lens_light"]["q"]
-    phi_light = _phi_to_rad(lens_info["lens_light"]["phi_G"])
-    e1_L_true, e2_L_true = _e1e2_from_q_phi(q_light, phi_light)
-    R_true = lens_info["lens_light"]["R_sersic"]
-    n_true = lens_info["lens_light"]["n_sersic"]
-
-    truth_values = {
-        "lens_theta_E": thetaE_true,
-        "lens_gamma": gamma_true,
-        "lens_e1": e1_mass_true,
-        "lens_e2": e2_mass_true,
-        "light_Re_L": R_true,
-        "light_n_L": n_true,
-        "light_e1_L": e1_L_true,
-        "light_e2_L": e2_L_true,
-    }
-    markers = [truth_values.get(k, np.nan) for k in names]
+    if truth_values is not None:
+        markers = [truth_values.get(k, np.nan) for k in names]
+    else:
+        markers = None
 
     settings_mcsamples = {
         "smooth_scale_1D": 0.5,
@@ -193,70 +143,66 @@ def nautilus_corner_plot(
                 y_mid + 0.5 * (y_hi - y_lo) * scale_factor,
             )
 
-    def _weighted_mean(x, w):
-        w = np.asarray(w, float)
-        w = w / (w.sum() + 1e-300)
-        return float(np.sum(w * np.asarray(x, float)))
+    if truth_values is not None:
+        def _weighted_mean(x, w):
+            w = np.asarray(w, float)
+            w = w / (w.sum() + 1e-300)
+            return float(np.sum(w * np.asarray(x, float)))
 
-    for i, name in enumerate(names):
-        mu = _weighted_mean(samples_list[i], weights)
-        tv = truth_values.get(name, np.nan)
-        ax = g.subplots[i][i]
+        for i, name in enumerate(names):
+            mu = _weighted_mean(samples_list[i], weights)
+            tv = truth_values.get(name, np.nan)
+            ax = g.subplots[i][i]
 
-        if rel_error and np.isfinite(tv) and abs(tv) > 1e-12:
-            err_pct = 100.0 * (mu - tv) / tv
-            label = f"$\\Delta\\%= {err_pct:+.2f}\\%$"
-        else:
-            err_abs = mu - tv
-            label = (
-                f"$\\mathrm{{Truth}} = {tv:.3f}$\n"
-                f"$\\Delta = {err_abs:+.2e}$"
+            if rel_error and np.isfinite(tv) and abs(tv) > 1e-12:
+                err_pct = 100.0 * (mu - tv) / tv
+                label = f"$\\Delta\\%= {err_pct:+.2f}\\%$"
+            else:
+                err_abs = mu - tv
+                label = (
+                    f"$\\mathrm{{Truth}} = {tv:.3f}$\n"
+                    f"$\\Delta = {err_abs:+.2e}$"
+                )
+
+            ax.text(
+                0.98,
+                0.96,
+                label,
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=10,
+                bbox=dict(
+                    boxstyle="round,pad=0.18", fc="white", ec="0.6", alpha=0.85
+                ),
             )
 
-        ax.text(
-            0.98,
-            0.96,
-            label,
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=10,
-            bbox=dict(
-                boxstyle="round,pad=0.18", fc="white", ec="0.6", alpha=0.85
-            ),
-        )
-
-    out_path = os.path.join(
-        out_dir, f"corner_nautilus_rung{rung}_seed{seed}.png"
-    )
+    out_path = os.path.join(out_dir, f"{tag}.png")
     g.export(out_path, dpi=300)
     plt.show()
     print("Saved NAUTILUS corner plot to:", out_path)
 
 
 def pso_corner_plot(
-    base: str,
-    rung: int,
-    code_id: int,
-    seed: int,
     out_dir: str,
     chain_path: str | None = None,
     params_to_corner: list[str] | None = None,
+    truth_values: dict[str, float] | None = None,
+    tag: str = "corner_pso",
     rel_error: bool = False,
 ):
-    """Create GetDist corner plot from PSO swarm samples with TDLMC truth markers.
+    """Create GetDist corner plot from PSO swarm samples with optional truth markers.
 
     Analogous to nautilus_corner_plot but uses PSO swarm samples instead of
     nested sampling posterior.
 
     Args:
-        base: Base directory for TDLMC data.
-        rung: TDLMC rung number.
-        code_id: Code ID within the rung.
-        seed: Random seed identifying the system.
-        out_dir: Directory containing pso_chain.npz.
+        out_dir: Directory containing pso_chain.npz and for saving output.
         chain_path: Path to PSO chain file. If None, uses out_dir/pso_chain.npz.
         params_to_corner: Parameter names to include. If None, uses defaults.
+        truth_values: Optional dict mapping parameter names to true values
+            for plotting truth markers and error annotations.
+        tag: Filename prefix for the saved plot.
         rel_error: If True, show relative error instead of absolute.
 
     Raises:
@@ -298,45 +244,10 @@ def pso_corner_plot(
     names = available
     samples_list = [samples_all[:, name_to_idx[p]] for p in names]
 
-    code = f"code{code_id}"
-    truth_file = os.path.join(
-        base,
-        f"TDC/rung{rung}_open_box/{code}/f160w-seed{seed}/lens_all_info.txt",
-    )
-    lens_info = parse_lens_info_file(truth_file)
-
-    def _phi_to_rad(phi):
-        return np.deg2rad(phi) if np.abs(phi) > 2 * np.pi else float(phi)
-
-    def _e1e2_from_q_phi(q, phi):
-        e = (1 - q) / (1 + q)
-        return e * np.cos(2 * phi), e * np.sin(2 * phi)
-
-    thetaE_true = lens_info["lens_mass_model"]["SPEMD"]["theta_E"]
-    gamma_true = lens_info["lens_mass_model"]["SPEMD"]["gamma"]
-    q_mass = lens_info["lens_mass_model"]["SPEMD"]["q"]
-    phi_mass = _phi_to_rad(
-        lens_info["lens_mass_model"]["SPEMD"].get("phi_G", 0.0)
-    )
-    e1_mass_true, e2_mass_true = _e1e2_from_q_phi(q_mass, phi_mass)
-
-    q_light = lens_info["lens_light"]["q"]
-    phi_light = _phi_to_rad(lens_info["lens_light"]["phi_G"])
-    e1_L_true, e2_L_true = _e1e2_from_q_phi(q_light, phi_light)
-    R_true = lens_info["lens_light"]["R_sersic"]
-    n_true = lens_info["lens_light"]["n_sersic"]
-
-    truth_values = {
-        "lens_theta_E": thetaE_true,
-        "lens_gamma": gamma_true,
-        "lens_e1": e1_mass_true,
-        "lens_e2": e2_mass_true,
-        "light_Re_L": R_true,
-        "light_n_L": n_true,
-        "light_e1_L": e1_L_true,
-        "light_e2_L": e2_L_true,
-    }
-    markers = [truth_values.get(k, np.nan) for k in names]
+    if truth_values is not None:
+        markers = [truth_values.get(k, np.nan) for k in names]
+    else:
+        markers = None
 
     settings_mcsamples = {
         "smooth_scale_1D": 0.5,
@@ -386,40 +297,41 @@ def pso_corner_plot(
                 y_mid + 0.5 * (y_hi - y_lo) * scale_factor,
             )
 
-    def _weighted_mean(x, w):
-        w = np.asarray(w, float)
-        w = w / (w.sum() + 1e-300)
-        return float(np.sum(w * np.asarray(x, float)))
+    if truth_values is not None:
+        def _weighted_mean(x, w):
+            w = np.asarray(w, float)
+            w = w / (w.sum() + 1e-300)
+            return float(np.sum(w * np.asarray(x, float)))
 
-    for i, name in enumerate(names):
-        mu = _weighted_mean(samples_list[i], weights)
-        tv = truth_values.get(name, np.nan)
-        ax = g.subplots[i][i]
+        for i, name in enumerate(names):
+            mu = _weighted_mean(samples_list[i], weights)
+            tv = truth_values.get(name, np.nan)
+            ax = g.subplots[i][i]
 
-        if rel_error and np.isfinite(tv) and abs(tv) > 1e-12:
-            err_pct = 100.0 * (mu - tv) / tv
-            label = f"$\\Delta\\%= {err_pct:+.2f}\\%$"
-        else:
-            err_abs = mu - tv
-            label = (
-                f"$\\mathrm{{Truth}} = {tv:.3f}$\n"
-                f"$\\Delta = {err_abs:+.2e}$"
+            if rel_error and np.isfinite(tv) and abs(tv) > 1e-12:
+                err_pct = 100.0 * (mu - tv) / tv
+                label = f"$\\Delta\\%= {err_pct:+.2f}\\%$"
+            else:
+                err_abs = mu - tv
+                label = (
+                    f"$\\mathrm{{Truth}} = {tv:.3f}$\n"
+                    f"$\\Delta = {err_abs:+.2e}$"
+                )
+
+            ax.text(
+                0.98,
+                0.96,
+                label,
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=10,
+                bbox=dict(
+                    boxstyle="round,pad=0.18", fc="white", ec="0.6", alpha=0.85
+                ),
             )
 
-        ax.text(
-            0.98,
-            0.96,
-            label,
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=10,
-            bbox=dict(
-                boxstyle="round,pad=0.18", fc="white", ec="0.6", alpha=0.85
-            ),
-        )
-
-    out_path = os.path.join(out_dir, f"corner_pso_rung{rung}_seed{seed}.png")
+    out_path = os.path.join(out_dir, f"{tag}.png")
     g.export(out_path, dpi=300)
     plt.show()
     print("Saved PSO corner plot to:", out_path)

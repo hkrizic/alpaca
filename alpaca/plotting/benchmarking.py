@@ -1,5 +1,5 @@
 """
-Benchmarking & plotting helpers for TDLMC inference runs.
+Benchmarking & plotting helpers for lens modeling inference runs.
 
 This module knows how to:
 
@@ -62,8 +62,7 @@ def load_multistart_summary(outdir: str, verbose: bool = True) -> dict[str, Any]
     """
     Load a multi-start summary (and best-fit parameters) from disk.
 
-    This is similar to tdlmc_inference.load_multistart_summary, but
-    independent of that module so you can use it directly here.
+    Load a multi-start summary and best-fit parameters from disk.
 
     Parameters
     ----------

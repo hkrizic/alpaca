@@ -1,19 +1,17 @@
 """
-Run Configuration for Alpaca Pipeline (Generic)
-================================================
+Run Configuration for Alpaca Pipeline
+======================================
 
-Pipeline settings for the generic entry point ``run_alpaca.py``.
 Edit the settings below, then call ``load_config()`` to get a ready-to-use
 ``PipelineConfig`` object.
 
-For TDLMC-specific configuration, see ``run_config_TDC.py`` instead.
+TDLMC-specific helpers (data loading, time-delay parsing) are provided by
+``tdlmc_helper`` at the repository root.  The Alpaca package itself is
+generic and knows nothing about TDLMC paths or file formats.
 """
 
 import datetime
 import os
-
-import numpy as np
-from astropy.io import fits
 
 from alpaca.config import (
     CorrFieldConfig,
@@ -25,9 +23,12 @@ from alpaca.config import (
 )
 
 # =============================================================================
-# OUTPUT DIRECTORY
+# DATA IDENTIFICATION  (TDLMC-specific)
 # =============================================================================
-OUTPUT_DIR = "./results/run_{date}/"  # {date} is replaced at runtime
+BASE_DIR = "."
+RUNG = 2
+CODE_ID = 1       # or read from env: int(os.environ.get("LENS_CODE", 1))
+SEED = 120        # or read from env: int(os.environ.get("LENS_SEED", 120))
 
 # =============================================================================
 # SOURCE LIGHT MODEL  (choose ONE)
@@ -68,6 +69,8 @@ RUN_SAMPLING = True
 # =============================================================================
 # LIKELIHOOD SETTINGS
 # =============================================================================
+USE_TIME_DELAYS = True
+
 # Ray shooting consistency (penalises scatter in ray-traced source positions)
 USE_RAYSHOOT_CONSISTENCY = True
 RAYSHOOT_CONSISTENCY_SIGMA = 0.0002  # arcsec, astrometric uncertainty floor
@@ -114,21 +117,22 @@ LENS_GAMMA_PRIOR_SIGMA = 0.2     # only used when type is "normal"
 # POINT SOURCE DETECTION
 # =============================================================================
 PS_MIN_SEP = 0.08          # minimum separation between images (arcsec)
+PS_FALLBACK_TO_TRUTH = True  # use truth positions if detection fails
 
 
 # =============================================================================
-# FUNCTIONS  -- nothing below here needs editing
+# BUILD PIPELINE CONFIG  -- nothing below here needs editing
 # =============================================================================
 
-def load_config(use_time_delays: bool = True) -> PipelineConfig:
+def load_config() -> PipelineConfig:
     """Build a ``PipelineConfig`` from the settings defined above.
 
-    Parameters
-    ----------
-    use_time_delays : bool
-        Whether the pipeline should include time delays in the likelihood.
-        Typically derived from whether time-delay data is provided.
+    The output directory is derived from the TDLMC identifiers
+    (``BASE_DIR``, ``RUNG``, ``CODE_ID``, ``SEED``) via
+    ``tdlmc_helper.tdlmc_paths``.
     """
+    from tdlmc_helper import tdlmc_paths
+
     use_shapelets = USE_SHAPELETS
     use_corr_fields = USE_CORR_FIELDS
 
@@ -138,11 +142,17 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
               "setting USE_SHAPELETS to False.")
         use_shapelets = False
 
-    # Output directory
+    # Output directory with source model suffix
+    if use_corr_fields:
+        suffix = "CorrField"
+    elif use_shapelets:
+        suffix = "Shapelets"
+    else:
+        suffix = "Sersic"
     dateandtime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    output_dir = OUTPUT_DIR.replace("{date}", dateandtime)
-    if not output_dir.endswith("/"):
-        output_dir += "/"
+
+    folder, results_dir = tdlmc_paths(BASE_DIR, RUNG, CODE_ID, SEED)
+    output_dir = os.path.join(results_dir, f"{suffix}/run_{dateandtime}/")
 
     config = PipelineConfig(
         output_dir=output_dir,
@@ -166,7 +176,7 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
 
         # Point source detection
         ps_min_sep=PS_MIN_SEP,
-        ps_fallback_to_truth=False,
+        ps_fallback_to_truth=PS_FALLBACK_TO_TRUTH,
 
         # Likelihood
         use_rayshoot_consistency=USE_RAYSHOOT_CONSISTENCY,
@@ -200,7 +210,7 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
             adam_warmup_fraction=0.1,
             adam_grad_clip=10.0,
             adam_use_cosine_decay=True,
-            use_time_delays=use_time_delays,
+            use_time_delays=USE_TIME_DELAYS,
             use_rayshoot_consistency=USE_RAYSHOOT_CONSISTENCY,
             rayshoot_consistency_sigma=RAYSHOOT_CONSISTENCY_SIGMA,
             use_rayshoot_systematic_error=USE_RAYSHOOT_SYSTEMATIC_ERROR,
@@ -212,7 +222,7 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
 
         sampler_config=SamplerConfig(
             sampler=SAMPLER,
-            use_time_delays=use_time_delays,
+            use_time_delays=USE_TIME_DELAYS,
             use_rayshoot_consistency=USE_RAYSHOOT_CONSISTENCY,
             rayshoot_consistency_sigma=RAYSHOOT_CONSISTENCY_SIGMA,
             use_source_position_rayshoot=USE_SOURCEPOSITION_RAYSHOOT,
@@ -248,6 +258,7 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
 
     # Print summary
     print("Configuration:")
+    print(f"  TDLMC data: rung={RUNG}, code={CODE_ID}, seed={SEED}")
     print(f"  Output directory: {output_dir}")
     if use_corr_fields:
         print(f"  Source model: Correlated Fields (pixels={CORR_FIELD_NUM_PIXELS})")
@@ -258,7 +269,7 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
     else:
         print("  Source model: Sersic only")
     print(f"  Sampler: {SAMPLER}")
-    print(f"  Time delays in likelihood: {use_time_delays}")
+    print(f"  Time delays in likelihood: {USE_TIME_DELAYS}")
     print(f"  Ray shooting consistency: {USE_RAYSHOOT_CONSISTENCY} "
           f"(sigma={RAYSHOOT_CONSISTENCY_SIGMA}, "
           f"use_source_pos={USE_SOURCEPOSITION_RAYSHOOT})")
@@ -274,108 +285,49 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
         print(f" (sigma={LENS_GAMMA_PRIOR_SIGMA})")
     else:
         print()
-    print(f"  Point source detection: min_sep={PS_MIN_SEP}\"")
+    print(f"  Point source detection: min_sep={PS_MIN_SEP}\", "
+          f"fallback_to_truth={PS_FALLBACK_TO_TRUTH}")
 
     return config
 
 
-def load_data(
-    image_path: str,
-    psf_path: str,
-    noise_map_path: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load image, PSF, and noise map from FITS or .npy files.
-
-    Parameters
-    ----------
-    image_path : str
-        Path to the 2-D lens image.
-    psf_path : str
-        Path to the 2-D PSF kernel.
-    noise_map_path : str
-        Path to the 2-D noise map.
+def load_tdlmc_data():
+    """Load TDC image data.
 
     Returns
     -------
-    img, psf_kernel, noise_map : np.ndarray
-        The loaded arrays.
+    img : np.ndarray
+        2-D lens image.
+    psf_kernel : np.ndarray
+        2-D PSF kernel.
+    noise_map : np.ndarray
+        2-D noise map.
     """
-    img = _load_array(image_path)
-    psf_kernel = _load_array(psf_path)
-    noise_map = _load_array(noise_map_path)
-    return img, psf_kernel, noise_map
+    from tdlmc_helper import load_tdlmc_image, tdlmc_paths
+
+    folder, _ = tdlmc_paths(BASE_DIR, RUNG, CODE_ID, SEED)
+    return load_tdlmc_image(folder)
 
 
-def parse_positions_and_delays(
-    image_positions: dict[str, tuple[float, float]],
-    time_delays: dict[str, tuple[float, float]] | None,
-) -> tuple[
-    tuple[np.ndarray, np.ndarray],
-    np.ndarray | None,
-    np.ndarray | None,
-    list[str],
-]:
-    """Convert user-facing dicts into arrays expected by ``run_pipeline``.
+def load_tdlmc_time_delays(x0s, y0s):
+    """Load TDC time delay data matched to detected positions.
 
     Parameters
     ----------
-    image_positions : dict
-        Mapping of image labels to approximate ``(x, y)`` positions in arcsec.
-        These are used to label the auto-detected images so that time delays
-        are matched to the correct pairs.  The first entry is the reference
-        image for time delays.
-    time_delays : dict or None
-        Mapping of non-reference image labels to ``(delay, error)`` in days.
-        Set to *None* to run without time-delay likelihood.
+    x0s, y0s : array-like
+        Detected point-source image positions.
 
     Returns
     -------
-    positions : tuple of (np.ndarray, np.ndarray)
-        Approximate ``(x_array, y_array)`` with the reference image first.
-    measured_delays : np.ndarray or None
-        Delays relative to the reference image (length ``n_images - 1``).
-    delay_errors : np.ndarray or None
-        1-sigma errors on the delays.
-    labels : list of str
-        Ordered image labels (e.g. ``["A", "B", "C", "D"]``).
+    measured_delays : np.ndarray
+    delay_errors : np.ndarray
+    det_labels : list
+    used_fallback : bool
+    truth_positions : tuple or None
     """
-    labels = list(image_positions.keys())
-    xs = np.array([image_positions[lab][0] for lab in labels])
-    ys = np.array([image_positions[lab][1] for lab in labels])
+    from tdlmc_helper import load_time_delay_data
 
-    if time_delays is not None:
-        ref_label = labels[0]
-        delays = []
-        errors = []
-        for label in labels[1:]:
-            if label not in time_delays:
-                raise ValueError(
-                    f"Time delay for image '{label}' not found in time_delays. "
-                    f"Expected keys: {labels[1:]} (all non-reference images)."
-                )
-            dt, err = time_delays[label]
-            delays.append(dt)
-            errors.append(err)
-        measured_delays = np.array(delays)
-        delay_errors = np.array(errors)
-        print(f"  Reference image: {ref_label}")
-        for label in labels[1:]:
-            dt, err = time_delays[label]
-            print(f"  dt({label}-{ref_label}) = {dt:.2f} +/- {err:.2f} days")
-    else:
-        measured_delays = None
-        delay_errors = None
-
-    return (xs, ys), measured_delays, delay_errors, labels
-
-
-def _load_array(path: str) -> np.ndarray:
-    """Load a 2-D array from a FITS or .npy file."""
-    ext = os.path.splitext(path)[1].lower()
-    if ext in (".fits", ".fit"):
-        return np.asarray(fits.getdata(path), dtype=float)
-    elif ext == ".npy":
-        return np.load(path).astype(float)
-    else:
-        raise ValueError(f"Unsupported file format '{ext}' for {path}. "
-                         "Use .fits or .npy.")
+    return load_time_delay_data(
+        BASE_DIR, RUNG, CODE_ID, SEED, x0s, y0s,
+        verbose=True, fallback_to_truth=PS_FALLBACK_TO_TRUTH,
+    )

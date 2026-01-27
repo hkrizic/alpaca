@@ -101,10 +101,17 @@ class TestPipelineConfig:
 
     def test_defaults(self):
         cfg = PipelineConfig()
-        assert cfg.rung == 2
-        assert cfg.code_id == 1
-        assert cfg.seed == 120
+        assert cfg.output_dir == "pipeline_output"
         assert cfg.run_sampling is True
+
+    def test_no_tdlmc_fields(self):
+        """Verify TDLMC-specific fields have been removed."""
+        cfg = PipelineConfig()
+        assert not hasattr(cfg, "rung")
+        assert not hasattr(cfg, "code_id")
+        assert not hasattr(cfg, "seed")
+        assert not hasattr(cfg, "base_dir")
+        assert not hasattr(cfg, "output_subdir")
 
     def test_nested_configs(self):
         cfg = PipelineConfig()

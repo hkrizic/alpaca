@@ -3,7 +3,7 @@
 Provides factory functions that build log-likelihood callables for use with
 nested sampling (Nautilus), MCMC (emcee), and JAX-accelerated inference.
 
-Extracted from tdlmc_inference.py during package restructuring.
+Extracted during package restructuring.
 """
 
 

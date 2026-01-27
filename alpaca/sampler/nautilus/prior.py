@@ -36,7 +36,7 @@ def build_nautilus_prior(
 
     Builds a multivariate prior distribution for nested sampling, with
     individual parameter priors centered on optimization results. Supports
-    the full TDLMC lens model including mass profile, external shear,
+    the full lens model including mass profile, external shear,
     lens/source light, point sources, and optional shapelet components.
 
     Prior choices follow standard conventions in strong lensing:

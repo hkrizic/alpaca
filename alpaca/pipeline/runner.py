@@ -1,7 +1,11 @@
 """
 alpaca.pipeline.runner
 
-Main pipeline orchestration: run_pipeline, quick_pipeline, load_pipeline_results.
+Main pipeline orchestration: run_pipeline, load_pipeline_results.
+
+The pipeline accepts generic image data (img, psf_kernel, noise_map) and
+optional time-delay information.  It does NOT depend on any specific
+external data layout.
 """
 
 from __future__ import annotations
@@ -22,8 +26,7 @@ from alpaca.config import (
 )
 
 # Data imports
-from alpaca.data.loader import tdlmc_paths
-from alpaca.data.setup import setup_tdlmc_lens
+from alpaca.data.setup import setup_lens
 from alpaca.plotting.diagnostics import (
     plot_multistart_summary,
     plot_psf_comparison,
@@ -54,7 +57,7 @@ except ImportError:
 from alpaca.pipeline.io import _make_output_structure, _save_fits, _save_json
 from alpaca.pipeline.setup import (
     _build_prob_model_with_psf_and_lens_image,
-    _load_time_delay_data,
+    _match_point_sources,
 )
 from alpaca.pipeline.stages.plotting import _generate_posterior_plots
 from alpaca.pipeline.stages.sampling import _run_nautilus_sampling, _run_nuts_sampling
@@ -62,11 +65,14 @@ from alpaca.pipeline.stages.sampling import _run_nautilus_sampling, _run_nuts_sa
 
 def run_pipeline(
     config: PipelineConfig | None = None,
-    # Quick access to common parameters (override config if provided)
-    base_dir: str | None = None,
-    rung: int | None = None,
-    code_id: int | None = None,
-    seed: int | None = None,
+    *,
+    img: np.ndarray,
+    psf_kernel: np.ndarray,
+    noise_map: np.ndarray,
+    image_positions: tuple[np.ndarray, np.ndarray] | None = None,
+    measured_delays: np.ndarray | None = None,
+    delay_errors: np.ndarray | None = None,
+    time_delay_labels: list[str] | None = None,
     sampler: Literal["nuts", "nautilus", "default"] | None = None,
     n_psf_iterations: int | None = None,
     n_multistart: int | None = None,
@@ -81,7 +87,8 @@ def run_pipeline(
     """
     Run the complete lens modeling pipeline.
 
-    This function orchestrates:
+    This function orchestrates three phases:
+
     1. PSF reconstruction using STARRED (iterative)
     2. Multi-start MAP optimization
     3. Posterior sampling with the chosen sampler
@@ -91,11 +98,26 @@ def run_pipeline(
     Parameters
     ----------
     config : PipelineConfig, optional
-        Full configuration object. If None, uses defaults.
-    base_dir : str, optional
-        Override base directory containing TDC data.
-    rung, code_id, seed : int, optional
-        Override TDLMC system identification.
+        Full configuration object.  If *None*, a default is created.
+    img : np.ndarray
+        2-D observed lens image.
+    psf_kernel : np.ndarray
+        2-D initial PSF kernel.
+    noise_map : np.ndarray
+        2-D noise map (same shape as *img*).
+    image_positions : tuple of (np.ndarray, np.ndarray), optional
+        Approximate reference positions ``(x_array, y_array)`` in arcsec,
+        used to label auto-detected images (A, B, C, D).  The pipeline
+        always auto-detects the actual positions from *img*; these
+        approximate positions only control the ordering so that time
+        delays are assigned to the correct image pairs.
+        If *None*, auto-detected order (brightest first) is used.
+    measured_delays : np.ndarray, optional
+        Measured time delays (relative to the first image).
+    delay_errors : np.ndarray, optional
+        1-sigma errors on *measured_delays*.
+    time_delay_labels : list of str, optional
+        Labels for each image (e.g. ``["A", "B", "C", "D"]``).
     sampler : {"nuts", "nautilus", "default"}, optional
         Override sampler choice.
     n_psf_iterations : int, optional
@@ -109,7 +131,8 @@ def run_pipeline(
     shapelets_n_max : int, optional
         Maximum shapelet order.
     use_corr_fields : bool, optional
-        Enable/disable Correlated Fields for source (mutually exclusive with shapelets).
+        Enable/disable Correlated Fields for source
+        (mutually exclusive with shapelets).
     verbose : bool
         Print progress information.
 
@@ -117,6 +140,7 @@ def run_pipeline(
     -------
     dict
         Pipeline results containing:
+
         - config: Final configuration used
         - setup: Lens model setup dictionary
         - psf_result: PSF reconstruction results (if run)
@@ -129,14 +153,6 @@ def run_pipeline(
         config = PipelineConfig()
 
     # Apply overrides
-    if base_dir is not None:
-        config.base_dir = base_dir
-    if rung is not None:
-        config.rung = rung
-    if code_id is not None:
-        config.code_id = code_id
-    if seed is not None:
-        config.seed = seed
     if sampler is not None:
         config.sampler_config.sampler = sampler
     if n_psf_iterations is not None:
@@ -166,16 +182,14 @@ def run_pipeline(
     # Setup timing
     t_start = time.perf_counter()
 
-    # Get paths
-    data_dir, results_dir = tdlmc_paths(config.base_dir, config.rung, config.code_id, config.seed)
-    output_dir = os.path.join(results_dir, config.output_subdir)
+    # Output directory
+    output_dir = config.output_dir
     dirs = _make_output_structure(output_dir)
 
     if verbose:
         print("=" * 70)
         print("LENS MODELING PIPELINE")
         print("=" * 70)
-        print(f"Data: rung={config.rung}, code={config.code_id}, seed={config.seed}")
         print(f"Output: {output_dir}")
         if config.use_corr_fields:
             print(f"Source model: Correlated Fields (pixels={config.corr_field_config.num_pixels})")
@@ -196,93 +210,26 @@ def run_pipeline(
     }
 
     # ========================================================================
-    # Phase 1: PSF Reconstruction
-    # ========================================================================
-    psf_kernel = None
-    psf_result = None
-    if verbose:
-        print("\n" + "=" * 70)
-        print("PHASE 1: PSF RECONSTRUCTION")
-        print("=" * 70)
-    if config.run_psf_reconstruction:
-        if verbose:
-            print("Starting PSF reconstruction...")
-        t_psf_start = time.perf_counter()
-
-        psf_result = run_psf_iterations(
-            base=config.base_dir,
-            rung=config.rung,
-            code_id=config.code_id,
-            seed=config.seed,
-            n_iterations=config.psf_config.n_iterations,
-            n_starts=config.psf_config.multistart_starts_per_iteration,
-            starred_cutout_size=config.psf_config.starred_cutout_size,
-            starred_supersampling_factor=config.psf_config.starred_supersampling_factor,
-            starred_mask_other_peaks=config.psf_config.starred_mask_other_peaks,
-            starred_mask_radius=config.psf_config.starred_mask_radius,
-            starred_rotation_mode=config.psf_config.starred_rotation_mode,
-            starred_negative_sigma_threshold=config.psf_config.starred_negative_sigma_threshold,
-            run_multistart_bool=config.psf_config.run_multistart,
-            parallelized_bool=config.psf_config.parallelized,
-            verbose_starred=config.psf_config.verbose,
-        )
-
-        psf_kernel = psf_result["psf_final"]
-
-        # Save PSF results
-        _save_fits(os.path.join(dirs["psf_fits"], "psf_initial.fits"), psf_result["psf_initial"])
-        _save_fits(os.path.join(dirs["psf_fits"], "psf_final.fits"), psf_kernel)
-
-        for i, iter_data in enumerate(psf_result["iterations"]):
-            _save_fits(os.path.join(dirs["psf_fits"], f"psf_iteration_{i+1}.fits"),
-                      iter_data["psf_updated"])
-
-        # Plot PSF comparison
-        if config.plotting_config.save_plots and config.plotting_config.plot_psf_comparison:
-            psf_iterations = [it["psf_updated"] for it in psf_result["iterations"]]
-            sigma_map = psf_result["iterations"][-1].get("psf_residual_sigma")
-
-            plot_psf_comparison(
-                psf_initial=psf_result["psf_initial"],
-                psf_final=psf_kernel,
-                psf_iterations=psf_iterations,
-                sigma_map=sigma_map,
-                save_path=os.path.join(dirs["psf_plots"], f"psf_comparison.{config.plotting_config.plot_format}"),
-                dpi=config.plotting_config.dpi,
-            )
-
-        t_psf = time.perf_counter() - t_psf_start
-        if verbose:
-            print(f"PSF reconstruction completed in {t_psf:.2f}s")
-
-        results["psf_result"] = psf_result
-    else:
-        if verbose:
-            print("Skipping PSF reconstruction phase.")
-    # ========================================================================
-    # Setup lens model (with final PSF if available)
+    # Build initial setup (before PSF reconstruction)
     # ========================================================================
     if verbose:
         print("\nSetting up lens model...")
 
-    setup = setup_tdlmc_lens(
-        base=config.base_dir,
-        rung=config.rung,
-        code_id=config.code_id,
-        seed=config.seed,
-        min_sep=config.ps_min_sep,
+    setup = setup_lens(
+        img=img,
+        psf_kernel=psf_kernel,
+        noise_map=noise_map,
         use_source_shapelets=config.use_source_shapelets,
         shapelets_n_max=config.shapelets_n_max,
         boost_noise_around_ps=config.boost_noise_around_ps,
         boost_kwargs=config.boost_noise_kwargs,
+        min_sep=config.ps_min_sep,
         use_rayshoot_systematic_error=config.use_rayshoot_systematic_error,
         rayshoot_sys_error_min=config.rayshoot_sys_error_min,
         rayshoot_sys_error_max=config.rayshoot_sys_error_max,
-        # Correlated Fields settings
         use_corr_fields=config.use_corr_fields,
         corr_field_num_pixels=config.corr_field_config.num_pixels,
         corr_field_mean_intensity=config.corr_field_config.mean_intensity,
-        corr_field_offset_std=config.corr_field_config.offset_std,
         corr_field_loglogavgslope=config.corr_field_config.loglogavgslope,
         corr_field_fluctuations=config.corr_field_config.fluctuations,
         corr_field_flexibility=config.corr_field_config.flexibility,
@@ -296,33 +243,125 @@ def run_pipeline(
         output_dir=dirs["root"],
     )
 
-    # If we have a reconstructed PSF, rebuild the model with it
-    if psf_kernel is not None:
+    # If the caller supplied approximate image positions, use them to
+    # reorder the auto-detected positions so that labels (A, B, C, D)
+    # match the correct detected images.  This ensures time delays are
+    # assigned to the right image pairs.
+    if image_positions is not None:
+        perm = _match_point_sources(
+            setup["x0s"], setup["y0s"],
+            np.asarray(image_positions[0]), np.asarray(image_positions[1]),
+        )
+        perm = np.array(perm)
+        setup["x0s"] = setup["x0s"][perm]
+        setup["y0s"] = setup["y0s"][perm]
+        setup["peak_vals"] = setup["peak_vals"][perm]
+        setup["peaks_px"] = np.asarray(setup["peaks_px"])[perm]
+
+        # Rebuild the probabilistic model with the reordered positions
+        prob_model_new, lens_image_new = _build_prob_model_with_psf_and_lens_image(
+            setup, psf_kernel
+        )
+        setup["prob_model"] = prob_model_new
+        setup["lens_image"] = lens_image_new
+
+        if verbose:
+            print("Matched auto-detected positions to reference labels:")
+            ref_xs = np.asarray(image_positions[0])
+            ref_ys = np.asarray(image_positions[1])
+            labels = time_delay_labels or [str(i) for i in range(len(ref_xs))]
+            for i, lab in enumerate(labels):
+                dx = setup["x0s"][i] - ref_xs[i]
+                dy = setup["y0s"][i] - ref_ys[i]
+                sep = np.hypot(dx, dy)
+                print(f"  {lab}: detected ({setup['x0s'][i]:+.4f}, {setup['y0s'][i]:+.4f})"
+                      f"  ref ({ref_xs[i]:+.4f}, {ref_ys[i]:+.4f})"
+                      f"  offset {sep:.4f}\"")
+
+    # ========================================================================
+    # Phase 1: PSF Reconstruction
+    # ========================================================================
+    psf_result = None
+    if verbose:
+        print("\n" + "=" * 70)
+        print("PHASE 1: PSF RECONSTRUCTION")
+        print("=" * 70)
+    if config.run_psf_reconstruction:
+        if verbose:
+            print("Starting PSF reconstruction...")
+        t_psf_start = time.perf_counter()
+
+        psf_result = run_psf_iterations(
+            setup=setup,
+            output_dir=dirs["psf_fits"],
+            n_iterations=config.psf_config.n_iterations,
+            n_starts=config.psf_config.multistart_starts_per_iteration,
+            starred_cutout_size=config.psf_config.starred_cutout_size,
+            starred_supersampling_factor=config.psf_config.starred_supersampling_factor,
+            starred_mask_other_peaks=config.psf_config.starred_mask_other_peaks,
+            starred_mask_radius=config.psf_config.starred_mask_radius,
+            starred_rotation_mode=config.psf_config.starred_rotation_mode,
+            starred_negative_sigma_threshold=config.psf_config.starred_negative_sigma_threshold,
+            run_multistart_bool=config.psf_config.run_multistart,
+            parallelized_bool=config.psf_config.parallelized,
+            verbose_starred=config.psf_config.verbose,
+        )
+
+        psf_final = psf_result["psf_final"]
+
+        # Save PSF results
+        _save_fits(os.path.join(dirs["psf_fits"], "psf_initial.fits"), psf_result["psf_initial"])
+        _save_fits(os.path.join(dirs["psf_fits"], "psf_final.fits"), psf_final)
+
+        for i, iter_data in enumerate(psf_result["iterations"]):
+            _save_fits(os.path.join(dirs["psf_fits"], f"psf_iteration_{i+1}.fits"),
+                      iter_data["psf_updated"])
+
+        # Plot PSF comparison
+        if config.plotting_config.save_plots and config.plotting_config.plot_psf_comparison:
+            psf_iterations = [it["psf_updated"] for it in psf_result["iterations"]]
+            sigma_map = psf_result["iterations"][-1].get("psf_residual_sigma")
+
+            plot_psf_comparison(
+                psf_initial=psf_result["psf_initial"],
+                psf_final=psf_final,
+                psf_iterations=psf_iterations,
+                sigma_map=sigma_map,
+                save_path=os.path.join(dirs["psf_plots"], f"psf_comparison.{config.plotting_config.plot_format}"),
+                dpi=config.plotting_config.dpi,
+            )
+
+        t_psf = time.perf_counter() - t_psf_start
+        if verbose:
+            print(f"PSF reconstruction completed in {t_psf:.2f}s")
+
+        # Rebuild model with the reconstructed PSF
         if verbose:
             print("Rebuilding model with reconstructed PSF...")
         prob_model, lens_image_new = _build_prob_model_with_psf_and_lens_image(
-            setup, psf_kernel
+            setup, psf_final
         )
         setup["prob_model"] = prob_model
         setup["lens_image"] = lens_image_new
-        setup["psf_kernel"] = psf_kernel
+        setup["psf_kernel"] = psf_final
         if verbose:
-            print(f"Model rebuilt with new PSF (shape: {psf_kernel.shape})")
-    else:
-        prob_model = setup["prob_model"]
+            print(f"Model rebuilt with new PSF (shape: {psf_final.shape})")
 
+        results["psf_result"] = psf_result
+    else:
+        if verbose:
+            print("Skipping PSF reconstruction phase.")
+
+    # ========================================================================
+    # Finalize setup references
+    # ========================================================================
+    prob_model = setup["prob_model"]
     results["setup"] = setup
 
-    img = setup["img"]
-    noise_map = setup["noise_map"]
     lens_image = setup["lens_image"]
     number_of_params = prob_model.num_parameters
     if verbose:
         print(f"Model has {number_of_params} parameters")
-
-    measured_delays = None
-    delay_errors = None
-    time_delay_labels = None
 
     # ========================================================================
     # Phase 2: Multi-start Optimization
@@ -339,65 +378,15 @@ def run_pipeline(
         t_ms_start = time.perf_counter()
 
         ms_config = config.gradient_descent_config
-        measured_delays = None
-        delay_errors = None
+
+        # Validate time-delay data if the config requires it
         if ms_config.use_time_delays:
-            try:
-                (measured_delays, delay_errors, time_delay_labels,
-                 used_fallback, truth_positions) = _load_time_delay_data(
-                    base_dir=config.base_dir,
-                    rung=config.rung,
-                    code_id=config.code_id,
-                    seed=config.seed,
-                    x0s=setup["x0s"],
-                    y0s=setup["y0s"],
-                    verbose=verbose,
-                    fallback_to_truth=config.ps_fallback_to_truth,
+            if measured_delays is None or delay_errors is None:
+                raise ValueError(
+                    "use_time_delays is True but measured_delays or delay_errors "
+                    "were not provided. Either pass them to run_pipeline() or set "
+                    "gradient_descent_config.use_time_delays=False."
                 )
-                # If fallback was used, rebuild setup with truth positions
-                if used_fallback and truth_positions is not None:
-                    if verbose:
-                        print("Rebuilding model with truth positions...")
-                    x_truth, y_truth = truth_positions
-                    setup = setup_tdlmc_lens(
-                        base=config.base_dir,
-                        rung=config.rung,
-                        code_id=config.code_id,
-                        seed=config.seed,
-                        n_ps_detect=len(x_truth),
-                        min_sep=0.01,  # Very small to accept close images
-                        use_source_shapelets=config.use_source_shapelets,
-                        shapelets_n_max=config.shapelets_n_max,
-                        boost_noise_around_ps=config.boost_noise_around_ps,
-                        boost_kwargs=config.boost_noise_kwargs,
-                        # Correlated Fields settings
-                        use_corr_fields=config.use_corr_fields,
-                        corr_field_num_pixels=config.corr_field_config.num_pixels,
-                        corr_field_mean_intensity=config.corr_field_config.mean_intensity,
-                        corr_field_offset_std=config.corr_field_config.offset_std,
-                        corr_field_loglogavgslope=config.corr_field_config.loglogavgslope,
-                        corr_field_fluctuations=config.corr_field_config.fluctuations,
-                        corr_field_flexibility=config.corr_field_config.flexibility,
-                        corr_field_asperity=config.corr_field_config.asperity,
-                        corr_field_cropped_border_size=config.corr_field_config.cropped_border_size,
-                        corr_field_exponentiate=config.corr_field_config.exponentiate,
-                        corr_field_interpolation=config.corr_field_config.interpolation_type,
-                        arc_mask_inner_radius=config.corr_field_config.arc_mask_inner_radius,
-                        arc_mask_outer_radius=config.corr_field_config.arc_mask_outer_radius,
-                        custom_arc_mask_path=config.corr_field_config.custom_arc_mask_path,
-                        output_dir=None,  # Mask already saved in first setup call
-                    )
-                    # Override with truth positions
-                    setup["x0s"] = x_truth
-                    setup["y0s"] = y_truth
-                    prob_model = setup["prob_model"]
-                    prob_model.x0s = x_truth
-                    prob_model.y0s = y_truth
-                    results["used_truth_positions"] = True
-            except FileNotFoundError as exc:
-                raise FileNotFoundError(
-                    f"{exc}. Set gradient_descent_config.use_time_delays=False to skip."
-                ) from exc
             results["time_delays"] = {
                 "measured_delays": measured_delays.tolist(),
                 "delay_errors": delay_errors.tolist(),
@@ -520,17 +509,10 @@ def run_pipeline(
             best_params = multistart_summary["best_params_json"]
             results["multistart_summary"] = multistart_summary
             results["best_params"] = best_params
-        except FileNotFoundError:
-            # Try standard results dir
-            try:
-                multistart_summary = load_multistart_summary(results_dir, verbose=verbose)
-                best_params = multistart_summary["best_params_json"]
-                results["multistart_summary"] = multistart_summary
-                results["best_params"] = best_params
-            except FileNotFoundError as err:
-                if config.run_sampling:
-                    raise ValueError("Cannot run sampling without multi-start results. "
-                                    "Set run_multistart=True or provide existing results.") from err
+        except FileNotFoundError as err:
+            if config.run_sampling:
+                raise ValueError("Cannot run sampling without multi-start results. "
+                                "Set run_multistart=True or provide existing results.") from err
 
     # ========================================================================
     # Phase 3: Posterior Sampling
@@ -557,63 +539,12 @@ def run_pipeline(
                 sampler_cfg.sampler = "nuts"  # Default to NUTS
 
         if sampler_cfg.use_time_delays:
-            if measured_delays is None or delay_errors is None or time_delay_labels is None:
-                try:
-                    (measured_delays, delay_errors, time_delay_labels,
-                     used_fallback, truth_positions) = _load_time_delay_data(
-                        base_dir=config.base_dir,
-                        rung=config.rung,
-                        code_id=config.code_id,
-                        seed=config.seed,
-                        x0s=setup["x0s"],
-                        y0s=setup["y0s"],
-                        verbose=verbose,
-                        fallback_to_truth=config.ps_fallback_to_truth,
-                    )
-                    # If fallback was used, rebuild setup with truth positions
-                    if used_fallback and truth_positions is not None:
-                        if verbose:
-                            print("Rebuilding model with truth positions...")
-                        x_truth, y_truth = truth_positions
-                        setup = setup_tdlmc_lens(
-                            base=config.base_dir,
-                            rung=config.rung,
-                            code_id=config.code_id,
-                            seed=config.seed,
-                            n_ps_detect=len(x_truth),
-                            min_sep=0.01,
-                            use_source_shapelets=config.use_source_shapelets,
-                            shapelets_n_max=config.shapelets_n_max,
-                            boost_noise_around_ps=config.boost_noise_around_ps,
-                            boost_kwargs=config.boost_noise_kwargs,
-                            # Correlated Fields settings
-                            use_corr_fields=config.use_corr_fields,
-                            corr_field_num_pixels=config.corr_field_config.num_pixels,
-                            corr_field_mean_intensity=config.corr_field_config.mean_intensity,
-                            corr_field_offset_std=config.corr_field_config.offset_std,
-                            corr_field_loglogavgslope=config.corr_field_config.loglogavgslope,
-                            corr_field_fluctuations=config.corr_field_config.fluctuations,
-                            corr_field_flexibility=config.corr_field_config.flexibility,
-                            corr_field_asperity=config.corr_field_config.asperity,
-                            corr_field_cropped_border_size=config.corr_field_config.cropped_border_size,
-                            corr_field_exponentiate=config.corr_field_config.exponentiate,
-                            corr_field_interpolation=config.corr_field_config.interpolation_type,
-                            arc_mask_inner_radius=config.corr_field_config.arc_mask_inner_radius,
-                            arc_mask_outer_radius=config.corr_field_config.arc_mask_outer_radius,
-                            custom_arc_mask_path=config.corr_field_config.custom_arc_mask_path,
-                            output_dir=None,  # Mask already saved in first setup call
-                        )
-                        setup["x0s"] = x_truth
-                        setup["y0s"] = y_truth
-                        prob_model = setup["prob_model"]
-                        prob_model.x0s = x_truth
-                        prob_model.y0s = y_truth
-                        lens_image = setup["lens_image"]
-                        results["used_truth_positions"] = True
-                except FileNotFoundError as exc:
-                    raise FileNotFoundError(
-                        f"{exc}. Set sampler_config.use_time_delays=False to skip."
-                    ) from exc
+            if measured_delays is None or delay_errors is None:
+                raise ValueError(
+                    "use_time_delays is True but measured_delays or delay_errors "
+                    "were not provided. Either pass them to run_pipeline() or set "
+                    "sampler_config.use_time_delays=False."
+                )
             results["time_delays"] = {
                 "measured_delays": measured_delays.tolist(),
                 "delay_errors": delay_errors.tolist(),
@@ -696,59 +627,6 @@ def run_pipeline(
         print(f"Results saved to: {output_dir}")
 
     return results
-
-
-def quick_pipeline(
-    rung: int,
-    code_id: int,
-    seed: int,
-    base_dir: str = ".",
-    sampler: Literal["nuts", "nautilus", "default"] = "default",
-    n_psf_iterations: int = 3,
-    n_multistart: int = 20,
-    use_shapelets: bool = True,
-    shapelets_n_max: int = 6,
-    verbose: bool = True,
-) -> dict:
-    """
-    Quick pipeline execution with sensible defaults.
-
-    Parameters
-    ----------
-    rung, code_id, seed : int
-        TDLMC system identification.
-    base_dir : str
-        Base directory containing TDC data.
-    sampler : {"nuts", "nautilus"}
-        Sampler choice.
-    n_psf_iterations : int
-        Number of PSF reconstruction iterations.
-    n_multistart : int
-        Number of multi-start optimization runs.
-    use_shapelets : bool
-        Enable source shapelets.
-    shapelets_n_max : int
-        Maximum shapelet order.
-    verbose : bool
-        Print progress.
-
-    Returns
-    -------
-    dict
-        Pipeline results.
-    """
-    return run_pipeline(
-        base_dir=base_dir,
-        rung=rung,
-        code_id=code_id,
-        seed=seed,
-        sampler=sampler,
-        n_psf_iterations=n_psf_iterations,
-        n_multistart=n_multistart,
-        use_source_shapelets=use_shapelets,
-        shapelets_n_max=shapelets_n_max,
-        verbose=verbose,
-    )
 
 
 def load_pipeline_results(output_dir: str) -> dict:

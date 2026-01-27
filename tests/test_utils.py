@@ -20,15 +20,18 @@ class TestImports:
             predict_time_delay,
             Ddt_2_H0,
             Dd_2_H0,
-            parse_lens_info_file,
             cast_ints_to_floats_in_dict,
         )
         assert callable(compute_D_dt)
         assert callable(predict_time_delay)
         assert callable(Ddt_2_H0)
         assert callable(Dd_2_H0)
-        assert callable(parse_lens_info_file)
         assert callable(cast_ints_to_floats_in_dict)
+
+    def test_no_tdlmc_functions(self):
+        """Verify TDLMC-specific functions have been removed from the package."""
+        import alpaca.utils as utils_mod
+        assert not hasattr(utils_mod, "parse_lens_info_file")
 
 
 class TestCastIntsToFloats:

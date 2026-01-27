@@ -9,7 +9,7 @@ Unified lens modeling pipeline combining:
 All outputs are organized in structured folders with comprehensive plotting.
 """
 
-from alpaca.pipeline.runner import load_pipeline_results, quick_pipeline, run_pipeline
+from alpaca.pipeline.runner import load_pipeline_results, run_pipeline
 from alpaca.plotting.diagnostics import (
     plot_chain_diagnostics,
     plot_multistart_summary,
@@ -23,7 +23,6 @@ from alpaca.plotting.posterior_plots import plot_corner_posterior
 __all__ = [
     # Main functions
     "run_pipeline",
-    "quick_pipeline",
     "load_pipeline_results",
     # Plotting utilities (re-exported for convenience)
     "plot_psf_comparison",

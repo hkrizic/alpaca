@@ -9,7 +9,6 @@ import os
 import numpy as np
 
 # Local project modules
-from alpaca.data.setup import setup_tdlmc_lens
 from alpaca.psf.isolation import (
     build_centered_noise_cutouts,
     generate_isolated_ps_images,
@@ -34,10 +33,8 @@ from alpaca.sampler.gradient_descent import load_multistart_summary, run_gradien
 # Main one-iteration pipeline
 # ----------------------------------------------------------------------------- #
 def run_psf_reconstruction_iteration(
-    base: str,
-    rung: int,
-    code_id: int,
-    seed: int,
+    setup: dict,
+    output_dir: str,
     *,
     n_starts: int = 20,
     multistart_min_starts: int = 3,
@@ -61,10 +58,16 @@ def run_psf_reconstruction_iteration(
     noise_map_is_sigma: bool = True,
     run_multistart_bool: bool = True,
 ) -> dict:
-    """Run a single PSF reconstruction iteration using STARRED."""
-    setup = setup_tdlmc_lens(base=base, rung=int(rung), code_id=int(code_id), seed=int(seed))
+    """Run a single PSF reconstruction iteration using STARRED.
 
-    outdir = setup["outdir"]
+    Parameters
+    ----------
+    setup : dict
+        Pre-built setup dictionary (e.g. from ``setup_lens``).
+    output_dir : str
+        Root directory for all output products.
+    """
+    outdir = output_dir
     img = setup["img"]
     noise_map = setup["noise_map"]
     psf_initial = setup["psf_kernel"]
@@ -238,10 +241,8 @@ def run_psf_reconstruction_iteration(
 
 
 def run_psf_reconstruction_iterations(
-    base: str,
-    rung: int,
-    code_id: int,
-    seed: int,
+    setup: dict,
+    output_dir: str,
     *,
     n_iterations: int = 3,
     n_starts: int = 20,
@@ -268,7 +269,14 @@ def run_psf_reconstruction_iterations(
     parallelized_bool: bool = True,
 ) -> dict:
     """
-    Run an iterative PSF reconstruction loop:
+    Run an iterative PSF reconstruction loop.
+
+    Parameters
+    ----------
+    setup : dict
+        Pre-built setup dictionary (e.g. from ``setup_lens``).
+    output_dir : str
+        Root directory for all output products.
 
     Iteration k:
       1) Run multistart lens modelling using PSF_{k-1}
@@ -281,8 +289,7 @@ def run_psf_reconstruction_iterations(
     if n_iterations < 1:
         raise ValueError("n_iterations must be >= 1")
 
-    setup = setup_tdlmc_lens(base=base, rung=int(rung), code_id=int(code_id), seed=int(seed))
-    outdir = setup["outdir"]
+    outdir = output_dir
     img = np.asarray(setup["img"])
     noise_map = np.asarray(setup["noise_map"])
     peaks_px = np.asarray(setup["peaks_px"], float)

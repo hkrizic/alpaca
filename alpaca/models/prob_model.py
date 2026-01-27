@@ -1,5 +1,5 @@
 """
-Probabilistic lens models and lens image construction for TDLMC.
+Probabilistic lens models and lens image construction for strong lens modeling.
 Includes STARRED PSF reconstruction support and Correlated Field source models.
 """
 
@@ -228,7 +228,7 @@ def create_corr_field(
 
 class ProbModel(NumpyroModel):
     """
-    NumPyro probabilistic model for the TDLMC lens:
+    NumPyro probabilistic model for strong lens modeling:
     EPL+Shear, Sersic lens/source, optional Shapelets, Point Sources.
     """
 

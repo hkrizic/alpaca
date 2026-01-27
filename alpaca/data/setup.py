@@ -1,13 +1,14 @@
 """
-High-level lens setup: setup_tdlmc_lens orchestrates grid, detection, mask,
-noise, and model creation for a single TDLMC system.
+High-level lens setup: setup_lens orchestrates grid, detection, mask,
+noise, and model creation for a single lens system.
 """
 
 import os
 
+import numpy as np
+
 from alpaca.data.detection import detect_ps_images_centered, make_plotter
 from alpaca.data.grids import make_pixel_grids
-from alpaca.data.loader import load_tdlmc_image, tdlmc_paths
 from alpaca.data.masks import (
     load_custom_arc_mask,
     make_source_arc_mask,
@@ -16,11 +17,11 @@ from alpaca.data.masks import (
 from alpaca.data.noise import boost_noise_around_point_sources
 
 
-def setup_tdlmc_lens(
-    base: str,
-    rung: int,
-    code_id: int,
-    seed: int,
+def setup_lens(
+    img: np.ndarray,
+    psf_kernel: np.ndarray,
+    noise_map: np.ndarray,
+    *,
     n_ps_detect: int = 4,
     pix_scl: float = 0.08,
     ps_oversample: int = 2,
@@ -59,10 +60,12 @@ def setup_tdlmc_lens(
 
     Parameters
     ----------
-    base : str
-        Base directory containing TDC data.
-    rung, code_id, seed : int
-        TDLMC system identification.
+    img : np.ndarray
+        2-D lens image array.
+    psf_kernel : np.ndarray
+        2-D PSF kernel array.
+    noise_map : np.ndarray
+        2-D noise map array (same shape as *img*).
     n_ps_detect : int
         Number of point sources to detect.
     pix_scl : float
@@ -137,9 +140,6 @@ def setup_tdlmc_lens(
             "Cannot use both Shapelets and Correlated Fields. "
             "Set only one of use_source_shapelets or use_corr_fields to True."
         )
-
-    folder, outdir = tdlmc_paths(base, rung, code_id, seed)
-    img, psf_kernel, noise_map = load_tdlmc_image(folder)
 
     pixel_grid, ps_grid, xgrid, ygrid, pix_scl = make_pixel_grids(
         img, pix_scl=pix_scl, ps_oversample=ps_oversample
@@ -288,8 +288,6 @@ def setup_tdlmc_lens(
         )
 
     return dict(
-        folder=folder,
-        outdir=outdir,
         img=img,
         psf_kernel=psf_kernel,
         noise_map=noise_map,

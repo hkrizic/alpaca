@@ -1,16 +1,19 @@
 """
-Lens Modeling Pipeline Script (Generic)
+Lens Modeling Pipeline Script (TDLMC)
 
-Entry-point for running the Alpaca lens modeling pipeline on arbitrary data.
-Specify your data paths, point-source image positions, and time delays below,
-then run this script.  All other pipeline settings live in ``run_config.py``.
+Entry-point for TDLMC (Time Delay Lens Modeling Challenge) data.
+Loads images and time delays from the TDC folder structure and runs
+the complete lens modeling pipeline.
 
 Pipeline phases:
     1. PSF Reconstruction - Iterative reconstruction using STARRED
     2. Gradient Descent Optimization - Two-phase MAP estimation
     3. Posterior Sampling - NUTS (NumPyro) or Nautilus
 
-For TDLMC data, see run_alpaca_tdc.py instead (uses TDC folder structure).
+Supports multiple source models: Sersic, Shapelets, or Correlated Fields.
+Edit run_config_TDC.py to change settings, then run this script.
+
+For generic (non-TDC) usage, see run_alpaca.py instead.
 
 Author: hkrizic
 """
@@ -22,50 +25,14 @@ import numpy as np
 
 from alpaca.pipeline import run_pipeline
 from alpaca.sampler.gradient_descent import compute_bic_from_results
-from run_config import load_config, load_data, parse_positions_and_delays
+from run_config_TDC import load_config, load_tdlmc_data
 
-# =============================================================================
-# 1. DATA PATHS  (edit these to point to your FITS / npy files)
-# =============================================================================
-IMAGE_PATH = "./data/image.fits"           # 2-D lens image
-PSF_PATH = "./data/psf.fits"               # 2-D PSF kernel
-NOISE_MAP_PATH = "./data/noise_map.fits"   # 2-D noise map (same shape as image)
-
-# =============================================================================
-# 2. APPROXIMATE POINT SOURCE IMAGE POSITIONS  (arcsec, relative to lens center)
-#
-#    These approximate positions are used to LABEL the auto-detected images
-#    (A, B, C, D), so that time delays are assigned to the correct pairs.
-#    The pipeline always auto-detects the actual positions from the image.
-#    The first entry is the reference image for time delays.
-# =============================================================================
-IMAGE_POSITIONS = {
-    "A": (-0.520, -0.410),
-    "B": ( 0.310, -0.285),
-    "C": ( 0.205,  0.480),
-    "D": (-0.105,  0.190),
-}
-
-# =============================================================================
-# 3. TIME DELAYS  (days, relative to the reference image)
-#
-#    Keys must match the non-reference images in IMAGE_POSITIONS.
-#    Values are (delay, 1-sigma error) in days.
-#    Set to None to disable time-delay likelihood entirely.
-# =============================================================================
-TIME_DELAYS = {
-    "B": (10.5, 1.2),
-    "C": (20.3, 1.5),
-    "D": (42.1, 2.0),
-}
-# TIME_DELAYS = None   # uncomment to run without time delays
-
-
-# =============================================================================
-# MAIN
-# =============================================================================
 
 def main():
+    # =============================================================================
+    # 1. TITLE AND INTRODUCTION
+    # =============================================================================
+
     print("=" * 50)
     print("=" * 50)
     print("ALPACA Lens Modeling Pipeline")
@@ -75,54 +42,34 @@ def main():
     print("  1. PSF Reconstruction")
     print("  2. Gradient Descent Optimization (MAP estimation)")
     print("  3. Posterior Sampling (NUTS or Nautilus)")
-    print("\nEdit run_config.py for pipeline settings.")
+    print("\nEdit run_config_TDC.py to change configuration settings.")
+    print("For generic (non-TDC) usage, see run_alpaca.py instead.")
     print("\nStarting pipeline...\n")
 
-    # ---- Configuration ----
-    use_time_delays = TIME_DELAYS is not None
-    config = load_config(use_time_delays=use_time_delays)
+    # =============================================================================
+    # 2. CONFIGURATION  (edit run_config.py, then call load_config())
+    # =============================================================================
+    config = load_config()
 
-    # ---- Load data ----
-    print("\nLoading data...")
-    print(f"  Image:     {IMAGE_PATH}")
-    print(f"  PSF:       {PSF_PATH}")
-    print(f"  Noise map: {NOISE_MAP_PATH}")
+    # =============================================================================
+    # 3. LOAD DATA
+    # =============================================================================
+    img, psf_kernel, noise_map = load_tdlmc_data()
 
-    img, psf_kernel, noise_map = load_data(IMAGE_PATH, PSF_PATH, NOISE_MAP_PATH)
-
-    print(f"  Image shape: {img.shape}")
-    print(f"  PSF shape:   {psf_kernel.shape}")
-
-    # ---- Parse positions and time delays ----
-    print("\nPoint source images:")
-    image_positions, measured_delays, delay_errors, labels = (
-        parse_positions_and_delays(IMAGE_POSITIONS, TIME_DELAYS)
-    )
-
-    n_images = len(labels)
-    print(f"  {n_images} images: {', '.join(labels)}")
-    for label, (x, y) in IMAGE_POSITIONS.items():
-        print(f"    {label}: ({x:+.4f}, {y:+.4f}) arcsec")
-
-    if TIME_DELAYS is not None:
-        print("\nTime delays:")
-    else:
-        print("\nNo time delays provided (running without time-delay likelihood).")
-
-    # ---- Run pipeline ----
+    # =============================================================================
+    # 4. RUN THE PIPELINE
+    # =============================================================================
     results = run_pipeline(
         config=config,
         img=img,
         psf_kernel=psf_kernel,
         noise_map=noise_map,
-        image_positions=image_positions,
-        measured_delays=measured_delays,
-        delay_errors=delay_errors,
-        time_delay_labels=labels,
         verbose=True,
     )
 
-    # ---- Explore results ----
+    # =============================================================================
+    # 5. EXPLORE RESULTS
+    # =============================================================================
     output_dir = results["output_dirs"]["root"]
     print(f"\nResults saved to: {output_dir}")
     print("\nDirectory structure:")
@@ -130,7 +77,7 @@ def main():
         rel_path = os.path.relpath(path, output_dir)
         print(f"  {name}: {rel_path}")
 
-    # PSF Reconstruction Results
+    # --- 5.1 PSF Reconstruction Results ---
     if "psf_result" in results and results["psf_result"] is not None:
         psf_result = results["psf_result"]
         print("\nPSF Reconstruction:")
@@ -138,7 +85,7 @@ def main():
     else:
         print("\nPSF reconstruction was not run.")
 
-    # Multi-start Optimization Results
+    # --- 5.2 Multi-start Optimization Results ---
     if "multistart_summary" in results and results["multistart_summary"] is not None:
         ms_summary = results["multistart_summary"]
         print("\nMulti-start Optimization:")
@@ -151,7 +98,7 @@ def main():
             best_chi2 = chi2_reds[ms_summary.get('best_run', 0)]
             print(f"  Best chi2_red: {best_chi2:.4f}")
 
-    # Posterior Sampling Results
+    # --- 5.3 Posterior Sampling Results ---
     if "posterior" in results and results["posterior"] is not None:
         posterior = results["posterior"]
         samples = posterior["samples"]
@@ -172,17 +119,18 @@ def main():
                 vals = samples[:, idx]
                 print(f"    {param}: {np.mean(vals):.4f} +/- {np.std(vals):.4f}")
 
+        # Report ray shooting systematic error if sampled
         if "log_sigma_rayshoot_sys" in param_names:
             idx = param_names.index("log_sigma_rayshoot_sys")
             log_vals = samples[:, idx]
-            vals = np.exp(log_vals)
+            vals = np.exp(log_vals)  # Transform to linear space
             print(f"    sigma_rayshoot_sys: {np.mean(vals)*1000:.4f} +/- {np.std(vals)*1000:.4f} mas")
         elif "sigma_rayshoot_sys" in param_names:
             idx = param_names.index("sigma_rayshoot_sys")
             vals = samples[:, idx]
             print(f"    sigma_rayshoot_sys: {np.mean(vals)*1000:.4f} +/- {np.std(vals)*1000:.4f} mas")
 
-        # Marginalized Posteriors
+        # --- 5.4 Marginalized Posteriors ---
         key_params_plot = [
             p for p in ["lens_theta_E", "lens_gamma", "light_Re_L", "light_n_L", "D_dt"]
             if p in param_names
@@ -206,7 +154,7 @@ def main():
             print(f"\nCustom analysis plot saved to: {plot_save_path}")
             plt.show()
 
-        # BIC
+        # --- 5.5 Compute and Report BIC ---
         try:
             bic_info = compute_bic_from_results(results)
             print("\n" + "=" * 50)
@@ -220,7 +168,6 @@ def main():
             print("\nNote: Lower BIC is better for model comparison.")
         except Exception as e:
             print(f"\nCould not compute BIC: {e}")
-
 
 if __name__ == "__main__":
     main()

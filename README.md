@@ -12,6 +12,10 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
 
 ## Features
 
+- **Source Reconstruction**
+  - Shapelets basis decomposition
+  - Correlated Fields (Gaussian Process) reconstruction with NIFTy-inspired priors
+
 - **Inference Methods**
   - Multi-start gradient descent (Adam + L-BFGS-B)
   - NUTS Hamiltonian Monte Carlo via NumPyro
@@ -25,10 +29,6 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
 - **PSF Reconstruction**
   - STARRED-based PSF reconstruction from lensed point sources
   - Iterative PSF refinement
-
-- **Source Reconstruction**
-  - Shapelets basis decomposition
-  - Correlated Fields (Gaussian Process) reconstruction with NIFTy-inspired priors
 
 - **Performance**
   - JAX-accelerated likelihood evaluation
@@ -82,6 +82,12 @@ The `load_config()` function at the bottom of `run_config.py` builds a `Pipeline
 
 ```bash
 python run_alpaca.py
+```
+
+Or submit to a SLURM cluster:
+
+```bash
+sbatch run_alpaca.sh
 ```
 
 The pipeline executes three phases in sequence:

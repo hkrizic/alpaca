@@ -13,32 +13,37 @@ pytest.importorskip("astropy")
 class TestImports:
     """Verify public API is importable."""
 
-    def test_import_loader(self):
-        from alpaca.data import tdlmc_paths, load_tdlmc_image
-        assert callable(tdlmc_paths)
-        assert callable(load_tdlmc_image)
-
     def test_import_setup(self):
-        from alpaca.data import setup_tdlmc_lens, make_pixel_grids
-        assert callable(setup_tdlmc_lens)
+        from alpaca.data import setup_lens, make_pixel_grids
+        assert callable(setup_lens)
         assert callable(make_pixel_grids)
 
+    def test_no_tdlmc_functions(self):
+        """Verify TDLMC-specific functions have been removed from the package."""
+        import alpaca.data as data_mod
+        assert not hasattr(data_mod, "tdlmc_paths")
+        assert not hasattr(data_mod, "load_tdlmc_image")
+        assert not hasattr(data_mod, "setup_tdlmc_lens")
 
-class TestTdlmcPaths:
-    """Test tdlmc_paths path construction."""
+    def test_import_detection(self):
+        from alpaca.data import detect_ps_images_centered, make_plotter
+        assert callable(detect_ps_images_centered)
+        assert callable(make_plotter)
 
-    def test_returns_tuple(self, tmp_path):
-        from alpaca.data.loader import tdlmc_paths
+    def test_import_masks(self):
+        from alpaca.data import (
+            load_custom_arc_mask,
+            make_source_arc_mask,
+            save_arc_mask_visualization,
+        )
+        assert callable(load_custom_arc_mask)
+        assert callable(make_source_arc_mask)
+        assert callable(save_arc_mask_visualization)
 
-        folder, outdir = tdlmc_paths(str(tmp_path), rung=2, code_id=1, seed=120)
-        assert isinstance(folder, str)
-        assert isinstance(outdir, str)
-        assert "rung2" in folder
-        assert "code1" in folder
-        assert "seed120" in folder
-
-    def test_creates_outdir(self, tmp_path):
-        from alpaca.data.loader import tdlmc_paths
-
-        _, outdir = tdlmc_paths(str(tmp_path), rung=0, code_id=3, seed=99)
-        assert os.path.isdir(outdir)
+    def test_import_noise(self):
+        from alpaca.data import (
+            auto_noise_boost_radius,
+            boost_noise_around_point_sources,
+        )
+        assert callable(auto_noise_boost_radius)
+        assert callable(boost_noise_around_point_sources)

@@ -198,12 +198,6 @@ class CorrFieldConfig:
 @dataclass
 class PipelineConfig:
     """Master configuration for the full pipeline."""
-    # Data identification
-    base_dir: str = "."
-    rung: int = 2
-    code_id: int = 1
-    seed: int = 120
-
     # Model settings - Source light representation
     # Note: use_source_shapelets and use_corr_fields are mutually exclusive
     use_source_shapelets: bool = True
@@ -245,5 +239,5 @@ class PipelineConfig:
     sampler_config: SamplerConfig = field(default_factory=SamplerConfig)
     plotting_config: PlottingConfig = field(default_factory=PlottingConfig)
 
-    # Output
-    output_subdir: str = "pipeline_output"
+    # Output directory
+    output_dir: str = "pipeline_output"
