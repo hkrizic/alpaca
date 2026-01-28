@@ -60,35 +60,6 @@ def _save_nautilus_timing_json(timing_dict: dict, filepath: str) -> str:
     return out_path
 
 
-def _attach_timing_from_json_if_available(sampler: Sampler, filepath: str) -> None:
-    """Load and attach timing metadata from most recent log file."""
-    base_dir = os.path.dirname(os.path.abspath(filepath))
-    log_dir = os.path.join(base_dir, "logs", "benchmark_timing")
-    if not os.path.isdir(log_dir):
-        return
-
-    ckpt_name = os.path.splitext(os.path.basename(filepath))[0]
-    prefix = f"timing_{ckpt_name}_"
-    candidates = [
-        fname for fname in os.listdir(log_dir)
-        if fname.startswith(prefix) and fname.endswith(".json")
-    ]
-    if not candidates:
-        return
-
-    # Filenames contain a YYYYMMDD_HHMMSS timestamp -> lexicographically sortable
-    latest = max(candidates)
-    timing_path = os.path.join(log_dir, latest)
-
-    try:
-        with open(timing_path) as f:
-            payload = json.load(f)
-        timing = payload.get("timing", payload)
-        sampler.timing = timing
-    except Exception:
-        pass
-
-
 def run_nautilus(
     prior: Prior,
     loglike,

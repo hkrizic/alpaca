@@ -15,14 +15,10 @@ class TestImports:
     def test_import_optimizer_functions(self):
         from alpaca.sampler.gradient_descent import (
             make_safe_loss,
-            adam_preopt,
-            adam_preopt_legacy,
             run_gradient_descent,
             load_multistart_summary,
         )
         assert callable(make_safe_loss)
-        assert callable(adam_preopt)
-        assert callable(adam_preopt_legacy)
         assert callable(run_gradient_descent)
         assert callable(load_multistart_summary)
 

@@ -13,23 +13,15 @@ pytest.importorskip("jax")
 class TestImports:
     """Verify public API is importable."""
 
-    def test_import_reconstruction(self):
-        from alpaca.psf import reconstruct_PSF, reconstruct_psf_from_star_rotations
-        assert callable(reconstruct_PSF)
-        assert callable(reconstruct_psf_from_star_rotations)
-
     def test_import_iterations(self):
-        from alpaca.psf import (
-            run_psf_reconstruction_iteration,
-            run_psf_reconstruction_iterations,
-        )
-        assert callable(run_psf_reconstruction_iteration)
+        from alpaca.psf import run_psf_reconstruction_iterations
         assert callable(run_psf_reconstruction_iterations)
 
     def test_import_isolation(self):
         from alpaca.psf import isolate_point_sources, generate_isolated_ps_images
         assert callable(isolate_point_sources)
         assert callable(generate_isolated_ps_images)
+
 
 
 class TestPsfUtils:
@@ -45,7 +37,6 @@ class TestPsfUtils:
     def test_circular_mask_centered(self):
         from alpaca.psf.utils import _circular_mask_centered
 
-        # Signature: _circular_mask_centered(size, cy, cx, radius)
         # Returns float array with 0s inside circle, 1s outside
         mask = _circular_mask_centered(21, cy=10.0, cx=10.0, radius=5)
         assert mask.shape == (21, 21)

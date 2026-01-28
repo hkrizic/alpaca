@@ -1,7 +1,7 @@
 """Likelihood construction for Bayesian lens model inference.
 
 Provides factory functions that build log-likelihood callables for use with
-nested sampling (Nautilus), MCMC (emcee), and JAX-accelerated inference.
+nested sampling (Nautilus) and JAX-accelerated inference.
 
 Extracted during package restructuring.
 """
@@ -286,6 +286,7 @@ def build_gaussian_loglike(
     const_term = np.log(2.0 * np.pi * sigma2)
     td_data = _prepare_time_delay_inputs(measured_delays, delay_errors)
     use_time_delays = td_data is not None
+    
     if use_time_delays:
         measured_td, errors_td = td_data
         kwargs_ref, extras_ref = paramdict_to_kwargs({}, return_extras=True)

@@ -6,6 +6,7 @@ parallel execution, diagnostics, and sample persistence.
 
 import json
 import os
+from functools import partial
 
 import jax
 import numpy as np
@@ -74,7 +75,17 @@ def _print_filtered_mcmc_summary(mcmc, exclude_patterns=None):
         try:
             # NumPyro 0.19+ format: summary_dict[param_name] = {stat_name: value}
             stats = summary_dict[key]
-            mean = float(stats['mean'])
+
+            # Skip vector-valued parameters whose stats are arrays (e.g.
+            # x_image, y_image, ps_amp, shapelets_amp_S).  float() would
+            # raise TypeError on these.
+            mean_val = stats['mean']
+            if np.ndim(mean_val) > 0:
+                n_elem = np.size(mean_val)
+                print(f"{key:>40} {'(vector param, ' + str(n_elem) + ' elements — skipped)':>70}")
+                continue
+
+            mean = float(mean_val)
             std = float(stats['std'])
             median = float(stats['median'])
             q5 = float(stats['5.0%'])
@@ -91,6 +102,70 @@ def _print_filtered_mcmc_summary(mcmc, exclude_patterns=None):
     if excluded_count > 0:
         print(f"[NUTS/NumPyro] ({excluded_count} source_pixels_field_xi parameters excluded from summary)")
     print()
+
+
+def _numpyro_model(logdensity_fn, init_params_structure):
+    """NumPyro model that uses an external log-density function.
+
+    Samples unconstrained parameters from ImproperUniform priors and
+    applies the log-density as a potential factor.
+
+    Args:
+        logdensity_fn: Log-density function mapping parameter dict to scalar.
+        init_params_structure: Dict of initial parameter values (single chain)
+            used to infer parameter names and shapes.
+    """
+    import numpyro
+    import numpyro.distributions as dist
+
+    params = {}
+    for key, init_val in init_params_structure.items():
+        # Get the shape for this parameter (excluding chain dimension)
+        if init_val.ndim > 1:
+            param_shape = init_val.shape[1:]
+        elif init_val.ndim == 1:
+            param_shape = ()
+        else:
+            param_shape = ()
+
+        # Use ImproperUniform prior (flat over all reals)
+        params[key] = numpyro.sample(
+            key,
+            dist.ImproperUniform(
+                dist.constraints.real,
+                batch_shape=(),
+                event_shape=param_shape,
+            )
+        )
+
+    # Add the log-density as a factor
+    with numpyro.handlers.block():
+        log_prob = logdensity_fn(params)
+
+    numpyro.factor("log_density", log_prob)
+
+
+def _compute_log_densities_batched(compute_fn, samples, n_total, batch_size):
+    """Compute log-densities in batches of a given size.
+
+    Args:
+        compute_fn: Vmapped + jitted log-density function.
+        samples: Dict of raw sample arrays (total samples along axis 0).
+        n_total: Total number of samples.
+        batch_size: Number of samples per batch.
+
+    Returns:
+        1-D numpy array of log-density values.
+    """
+    log_density_batches = []
+    for i in range(0, n_total, batch_size):
+        batch_samples = jax.tree_util.tree_map(
+            lambda x, _i=i: x[_i : _i + batch_size],
+            samples
+        )
+        batch_log_prob = compute_fn(batch_samples)
+        log_density_batches.append(np.asarray(batch_log_prob))
+    return np.concatenate(log_density_batches)
 
 
 def run_nuts_numpyro(
@@ -138,7 +213,6 @@ def run_nuts_numpyro(
         accelerators using jax.pmap for efficient parallel execution.
     """
     import numpyro
-    import numpyro.distributions as dist
     from numpyro.infer import MCMC, NUTS
 
     n_devices = jax.device_count()
@@ -162,43 +236,12 @@ def run_nuts_numpyro(
             f"Ensure each parameter leaf has shape (num_chains,) or (num_chains, dim)."
         )
 
-    def numpyro_model(init_params_structure):
-        """
-        NumPyro model that uses the external log-density function.
-        We sample unconstrained parameters and apply the log-density as potential.
-        """
-        params = {}
-        for key, init_val in init_params_structure.items():
-            # Get the shape for this parameter (excluding chain dimension)
-            if init_val.ndim > 1:
-                param_shape = init_val.shape[1:]
-            elif init_val.ndim == 1:
-                param_shape = ()
-            else:
-                param_shape = ()
-
-            # Use ImproperUniform prior (flat over all reals)
-            params[key] = numpyro.sample(
-                key,
-                dist.ImproperUniform(
-                    dist.constraints.real,
-                    batch_shape=(),
-                    event_shape=param_shape,
-                )
-            )
-
-        # Add the log-density as a factor
-        with numpyro.handlers.block():
-            log_prob = logdensity_fn(params)
-
-        numpyro.factor("log_density", log_prob)
-
     # Get structure for the model (use first chain's values)
     init_structure = jax.tree_util.tree_map(lambda x: x[0], initial_positions)
 
     # Create NUTS kernel
     nuts_kernel = NUTS(
-        lambda: numpyro_model(init_structure),
+        partial(_numpyro_model, logdensity_fn, init_structure),
         target_accept_prob=target_accept_prob,
         max_tree_depth=max_tree_depth,
         init_strategy=numpyro.infer.init_to_value(values=init_structure),
@@ -294,30 +337,12 @@ def run_nuts_numpyro(
                 print("[NUTS/NumPyro] WARNING: High divergence rate. Consider reparameterization.")
 
     # Compute log-density for each sample
-    # We need to evaluate the logdensity_fn on each sample
     if verbose:
         print("[NUTS/NumPyro] Computing log-densities for samples...")
 
-    def compute_log_density_single(params):
-        return logdensity_fn(params)
+    compute_log_density_vmap = jax.jit(jax.vmap(logdensity_fn))
 
-    compute_log_density_vmap = jax.jit(jax.vmap(compute_log_density_single))
-
-    # Batch the log-density computation to avoid OOM
-    # Compute for flattened samples in chunks with automatic fallback on OOM
     n_total_samples = len(next(iter(samples_flat_raw.values())))
-
-    def compute_log_densities_with_batch_size(batch_size):
-        """Compute log densities with a given batch size."""
-        log_density_batches = []
-        for i in range(0, n_total_samples, batch_size):
-            batch_samples = jax.tree_util.tree_map(
-                lambda x, _i=i: x[_i : _i + batch_size],
-                samples_flat_raw
-            )
-            batch_log_prob = compute_log_density_vmap(batch_samples)
-            log_density_batches.append(np.asarray(batch_log_prob))
-        return np.concatenate(log_density_batches)
 
     # Try progressively smaller batch sizes on OOM
     batch_sizes_to_try = [100, 50, 25, 10, 5, 1]
@@ -327,7 +352,9 @@ def run_nuts_numpyro(
         try:
             if verbose:
                 print(f"[NUTS/NumPyro] Computing log-densities in batches of {batch_size}...")
-            log_density_flat = compute_log_densities_with_batch_size(batch_size)
+            log_density_flat = _compute_log_densities_batched(
+                compute_log_density_vmap, samples_flat_raw, n_total_samples, batch_size
+            )
             break  # Success, exit the retry loop
         except Exception as e:
             error_str = str(e).lower()
@@ -366,6 +393,9 @@ def run_nuts_numpyro(
     # The samples are still valid even if diagnostics don't print
     if verbose:
         try:
+            print("\n[NUTS/NumPyro] Diagnostics summary (unconstrained parameter space):")
+            print("[NUTS/NumPyro] Note: values below are in the internal unconstrained")
+            print("[NUTS/NumPyro] parameterisation used by NUTS, NOT physical units.")
             _print_filtered_mcmc_summary(mcmc, exclude_patterns=["source_pixels_field_xi"])
         except Exception as e:
             print(f"[NUTS/NumPyro] Could not print diagnostics summary: {e}")

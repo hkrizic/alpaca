@@ -24,75 +24,6 @@ from numpyro.handlers import seed as numpyro_seed
 from numpyro.infer.util import constrain_fn
 
 
-def plot_multistart_history(
-    best_trace: Sequence[float],
-    final_losses: Sequence[float],
-    outdir: str | None = None,
-    rel_eps: float = 0.01,
-    filename: str = "best_loss_vs_run.png",
-    chi2_given: bool = False,
-):
-    """Plot optimization convergence across multi-start runs.
-
-    Shows best-so-far loss vs run number with per-run final losses overlaid.
-    Marks the last run where significant improvement (> rel_eps) occurred.
-
-    Args:
-        best_trace: Best loss value achieved after each run.
-        final_losses: Final loss value of each individual run.
-        outdir: Directory to save the plot. If None, not saved.
-        rel_eps: Relative improvement threshold for marking last significant gain.
-        filename: Output filename within outdir.
-        chi2_given: If True, label axes as reduced chi^2 instead of loss.
-    """
-    best_trace = np.asarray(best_trace, float)
-    final_losses = np.asarray(final_losses, float)
-    runs = np.arange(len(best_trace))
-
-    plt.figure(figsize=(7, 4.5))
-    if chi2_given:
-        plt.step(runs, best_trace, where="post", label="Best-so-far (reduced chi²)")
-        plt.scatter(
-            runs, final_losses, s=16, alpha=0.6, label="Per-run final reduced chi²"
-        )
-    else:
-        plt.step(runs, best_trace, where="post", label="Best-so-far (safe loss)")
-        plt.scatter(runs, final_losses, s=16, alpha=0.6, label="Per-run final loss")
-
-    if rel_eps is not None and len(best_trace) > 1:
-        improvements = best_trace[:-1] - best_trace[1:]
-        rel_impr = improvements / np.maximum(1e-12, best_trace[:-1])
-        sig_idxs = np.where(rel_impr > rel_eps)[0]
-        if sig_idxs.size > 0:
-            last_sig = int(sig_idxs[-1] + 1)
-            plt.axvline(
-                last_sig,
-                linestyle="--",
-                alpha=0.5,
-                label=f"Last >{int(rel_eps*100)}% gain @ run {last_sig}",
-            )
-    if chi2_given:
-        plt.xlabel("Run #")
-        plt.ylabel(r"Reduced $\chi^2$")
-        plt.title(r"Best-so-far reduced $\chi^2$ vs. multi-start run")
-        plt.grid(True, alpha=0.25)
-        plt.legend(loc="best")
-    else:
-        plt.xlabel("Run #")
-        plt.ylabel("Safe loss")
-        plt.title("Best-so-far loss vs. multi-start run")
-        plt.grid(True, alpha=0.25)
-        plt.legend(loc="best")
-    plt.tight_layout()
-
-    if outdir is not None:
-        path = os.path.join(outdir, filename)
-        plt.savefig(path, dpi=150)
-        print(f"Saved multi-start history plot to: {path}")
-
-    plt.show()
-
-
 def plot_multistart_summary(
     summary: dict,
     save_path: str,
@@ -528,47 +459,10 @@ def plot_nuts_diagnostics(
     return figures
 
 
-def visualize_initial_guess(init_params, lens_image, prob_model, data, plotter):
-    """Create a diagnostic plot comparing initial model guess to data.
-
-    Args:
-        init_params: Initial parameter dictionary.
-        lens_image: Herculens LensImage object.
-        prob_model: Probabilistic model with params2kwargs method.
-        data: Observed image array.
-        plotter: Herculens Plotter object for color normalization.
-
-    Returns:
-        Tuple of (fig, axes) matplotlib objects.
-    """
-    from herculens.Util import plot_util
-    from matplotlib.colors import TwoSlopeNorm
-
-    initial_model = lens_image.model(**prob_model.params2kwargs(init_params))
-
-    fig, axes = plt.subplots(1, 3, figsize=(10, 4))
-
-    axes[0].set_title("Initial guess model")
-    im = axes[0].imshow(initial_model, origin='lower', norm=plotter.norm_flux, cmap=plotter.cmap_flux)
-    plot_util.nice_colorbar(im)
-
-    axes[1].set_title("Data")
-    im = axes[1].imshow(data, origin='lower', norm=plotter.norm_flux, cmap=plotter.cmap_flux)
-    plot_util.nice_colorbar(im)
-
-    axes[2].set_title("Difference")
-    im = axes[2].imshow(initial_model - data, origin='lower', norm=TwoSlopeNorm(0), cmap=plotter.cmap_res)
-    plot_util.nice_colorbar(im)
-
-    fig.tight_layout()
-    return fig, axes
-
 
 __all__ = [
-    "plot_multistart_history",
     "plot_multistart_summary",
     "plot_chain_diagnostics",
     "plot_psf_comparison",
     "plot_nuts_diagnostics",
-    "visualize_initial_guess",
 ]

@@ -248,15 +248,18 @@ def run_pipeline(
     # match the correct detected images.  This ensures time delays are
     # assigned to the right image pairs.
     if image_positions is not None:
-        perm = _match_point_sources(
+        # _match_point_sources returns perm where perm[i]=j means
+        # detected image i matches reference image j.  We need the inverse:
+        # for each reference label j, which detected image goes in slot j.
+        fwd_perm = _match_point_sources(
             setup["x0s"], setup["y0s"],
             np.asarray(image_positions[0]), np.asarray(image_positions[1]),
         )
-        perm = np.array(perm)
-        setup["x0s"] = setup["x0s"][perm]
-        setup["y0s"] = setup["y0s"][perm]
-        setup["peak_vals"] = setup["peak_vals"][perm]
-        setup["peaks_px"] = np.asarray(setup["peaks_px"])[perm]
+        reorder = np.argsort(fwd_perm)
+        setup["x0s"] = setup["x0s"][reorder]
+        setup["y0s"] = setup["y0s"][reorder]
+        setup["peak_vals"] = setup["peak_vals"][reorder]
+        setup["peaks_px"] = np.asarray(setup["peaks_px"])[reorder]
 
         # Rebuild the probabilistic model with the reordered positions
         prob_model_new, lens_image_new = _build_prob_model_with_psf_and_lens_image(
@@ -446,16 +449,6 @@ def run_pipeline(
             kwargs = prob_model.params2kwargs(best_params)
             model_img = np.asarray(lens_image.model(**kwargs))
 
-            plot_model_summary_custom(
-                img=img,
-                model_img=model_img,
-                noise_map=noise_map,
-                save_path=os.path.join(dirs["multistart_plots"],
-                                       f"model_summary.{config.plotting_config.plot_format}"),
-                title="Best-fit Model (Multi-start)",
-                dpi=config.plotting_config.dpi,
-            )
-
             # Use herculens plotter if available
             if _HAS_PLOTTER:
                 plotter = Plotter(flux_vmin=1e-3, flux_vmax=10, res_vmax=4)
@@ -473,7 +466,17 @@ def run_pipeline(
                     bbox_inches="tight",
                 )
                 plt.close(fig)
-
+            else:
+                plot_model_summary_custom(
+                    img=img,
+                    model_img=model_img,
+                    noise_map=noise_map,
+                    save_path=os.path.join(dirs["multistart_plots"],
+                                        f"model_summary.{config.plotting_config.plot_format}"),
+                    title="Best-fit Model (Multi-start)",
+                    dpi=config.plotting_config.dpi,
+                )
+                
         # Ray tracing check: verify 4 images converge to same source position
         if config.plotting_config.save_plots:
             try:

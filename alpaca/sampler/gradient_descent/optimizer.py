@@ -7,6 +7,7 @@ parallel execution, automatic GPU memory management, and retry logic.
 import gc
 import json
 import os
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -36,121 +37,6 @@ def make_safe_loss(loss_obj):
         return jnp.where(jnp.isfinite(val), val, jnp.array(1e30))
 
     return _safe
-
-
-def adam_preopt(
-    loss_fn,
-    u0,
-    n_steps: int = 500,
-    lr: float = 5e-3,
-    warmup_fraction: float = 0.1,
-    grad_clip: float = 10.0,
-    use_cosine_decay: bool = True,
-    min_lr_fraction: float = 0.01,
-):
-    """Adam pre-optimization with warmup, cosine decay, and gradient clipping.
-
-    Args:
-        loss_fn: Objective function to minimize.
-        u0: Initial parameters in unconstrained space.
-        n_steps: Number of gradient steps.
-        lr: Peak learning rate (reached after warmup).
-        warmup_fraction: Fraction of n_steps for linear warmup.
-        grad_clip: Maximum gradient norm for clipping.
-        use_cosine_decay: Whether to use cosine annealing after warmup.
-        min_lr_fraction: Minimum lr as fraction of peak at end of decay.
-
-    Returns:
-        Parameters corresponding to minimum loss during optimization.
-    """
-    warmup_steps = int(n_steps * warmup_fraction)
-    decay_steps = n_steps - warmup_steps
-
-    if use_cosine_decay and decay_steps > 0:
-        schedule = optax.join_schedules(
-            schedules=[
-                optax.linear_schedule(
-                    init_value=lr * 0.01,
-                    end_value=lr,
-                    transition_steps=max(warmup_steps, 1),
-                ),
-                optax.cosine_decay_schedule(
-                    init_value=lr,
-                    decay_steps=decay_steps,
-                    alpha=min_lr_fraction,
-                ),
-            ],
-            boundaries=[warmup_steps],
-        )
-    else:
-        if warmup_steps > 0:
-            schedule = optax.join_schedules(
-                schedules=[
-                    optax.linear_schedule(
-                        init_value=lr * 0.01,
-                        end_value=lr,
-                        transition_steps=warmup_steps,
-                    ),
-                    optax.constant_schedule(lr),
-                ],
-                boundaries=[warmup_steps],
-            )
-        else:
-            schedule = optax.constant_schedule(lr)
-
-    opt = optax.chain(
-        optax.clip_by_global_norm(grad_clip),
-        optax.adam(learning_rate=schedule),
-    )
-    state = opt.init(u0)
-
-    @jax.jit
-    def step(u, state):
-        loss_val, g = jax.value_and_grad(loss_fn)(u)
-        updates, state = opt.update(g, state, u)
-        u2 = optax.apply_updates(u, updates)
-        return u2, state, loss_val
-
-    u = u0
-    best = u0
-    best_val = float(loss_fn(u0))
-
-    for _ in range(n_steps):
-        u, state, loss_val = step(u, state)
-        lv = float(loss_val)
-        if np.isfinite(lv) and lv < best_val:
-            best = u
-            best_val = lv
-    return best
-
-
-def adam_preopt_legacy(loss_fn, u0, n_steps: int = 200, lr: float = 5e-3):
-    """
-    Legacy Adam pre-optimization (constant learning rate, no clipping).
-
-    Kept for backwards compatibility. Use adam_preopt() for better results.
-    """
-    opt = optax.adam(lr)
-    state = opt.init(u0)
-
-    @jax.jit
-    def step(u, state):
-        loss_val, g = jax.value_and_grad(loss_fn)(u)
-        updates, state = opt.update(g, state)
-        u2 = optax.apply_updates(u, updates)
-        return u2, state, loss_val
-
-    u = u0
-    best = u0
-    best_val = float(loss_fn(u0))
-
-    for _ in range(n_steps):
-        u, state, loss_val = step(u, state)
-        lv = float(loss_val)
-        if np.isfinite(lv) and lv < best_val:
-            best = u
-            best_val = lv
-    return best
 
 
 def _adam_preopt_jax(
@@ -302,6 +188,138 @@ def _single_start_optimize(
     return u_opt, final_loss
 
 
+def _stack_pytrees(pytrees):
+    """Stack a list of pytrees along a new leading axis."""
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *pytrees)
+
+
+def _run_optimizations_chunked(
+    all_u0_list, optimize_fn, phase_name, n_devices, verbose
+):
+    """Run optimizations with progressive fallback on OOM.
+
+    Fallback chain: full batch -> chunks of 25 -> chunks of 10 ->
+    chunks of 5 -> sequential (chunk_size=1).
+
+    Args:
+        all_u0_list: List of initial parameter pytrees.
+        optimize_fn: Callable(u0) -> (u_opt, loss).
+        phase_name: Label for log messages.
+        n_devices: Number of JAX devices available.
+        verbose: Print progress information.
+
+    Returns:
+        Tuple of (u_opt_all, losses_all) — stacked pytree and 1-D array.
+    """
+    n_total = len(all_u0_list)
+    chunk_sizes_to_try = [n_total, 25, 10, 5, 1]  # Full, then progressively smaller chunks
+
+    for chunk_size in chunk_sizes_to_try:
+        if chunk_size > n_total:
+            continue
+
+        is_sequential = (chunk_size == 1)
+        is_full_batch = (chunk_size == n_total)
+
+        try:
+            # Clear caches before each attempt
+            jax.clear_caches()
+            gc.collect()
+
+            if is_sequential:
+                if verbose:
+                    print(f"[{phase_name}] Running sequential (chunk_size=1)...")
+                results_u, results_loss = [], []
+                for i, u0 in enumerate(all_u0_list):
+                    u_opt, loss = optimize_fn(u0)
+                    results_u.append(u_opt)
+                    results_loss.append(float(loss))
+                    if verbose and (i + 1) % 10 == 0:
+                        print(f"[{phase_name}] Completed {i + 1}/{n_total}")
+                u_opt_all = _stack_pytrees(results_u)
+                losses_all = jnp.array(results_loss)
+                return u_opt_all, losses_all
+
+            if is_full_batch:
+                if verbose:
+                    print(f"[{phase_name}] Running {n_total} parallel optimizations...")
+            else:
+                if verbose:
+                    print(f"[{phase_name}] Running in chunks of {chunk_size}...")
+
+            # Process in chunks
+            all_results_u = []
+            all_results_loss = []
+            n_chunks = (n_total + chunk_size - 1) // chunk_size
+
+            for chunk_idx in range(n_chunks):
+                start_idx = chunk_idx * chunk_size
+                end_idx = min(start_idx + chunk_size, n_total)
+                chunk_u0_list = all_u0_list[start_idx:end_idx]
+                actual_chunk_size = len(chunk_u0_list)
+
+                u0_stacked_chunk = _stack_pytrees(chunk_u0_list)
+
+                # Try multi-device pmap if available
+                if n_devices > 1 and actual_chunk_size >= n_devices:
+                    starts_per_device = (actual_chunk_size + n_devices - 1) // n_devices
+                    n_padded = starts_per_device * n_devices
+
+                    # Pad if needed
+                    if n_padded > actual_chunk_size:
+                        padded_list = chunk_u0_list + [chunk_u0_list[0]] * (n_padded - actual_chunk_size)
+                        u0_stacked_chunk = _stack_pytrees(padded_list)
+
+                    # Reshape for pmap
+                    u0_pmap = jax.tree_util.tree_map(
+                        lambda x, _nd=n_devices, _spd=starts_per_device: x.reshape((_nd, _spd) + x.shape[1:]),
+                        u0_stacked_chunk
+                    )
+                    pmap_opt = jax.pmap(lambda batch: jax.vmap(optimize_fn)(batch))
+                    u_opt_pmap, losses_pmap = pmap_opt(u0_pmap)
+
+                    # Flatten and trim padding
+                    u_opt_chunk = jax.tree_util.tree_map(
+                        lambda x, _np=n_padded, _acs=actual_chunk_size: x.reshape((_np,) + x.shape[2:])[:_acs],
+                        u_opt_pmap
+                    )
+                    losses_chunk = losses_pmap.reshape(-1)[:actual_chunk_size]
+                else:
+                    # Single device: use vmap
+                    u_opt_chunk, losses_chunk = jax.vmap(optimize_fn)(u0_stacked_chunk)
+
+                # Collect results from this chunk
+                for i in range(actual_chunk_size):
+                    u_i = jax.tree_util.tree_map(lambda x, _i=i: x[_i], u_opt_chunk)
+                    all_results_u.append(u_i)
+                    all_results_loss.append(float(losses_chunk[i]))
+
+                if verbose and not is_full_batch:
+                    print(f"[{phase_name}] Chunk {chunk_idx + 1}/{n_chunks} done ({end_idx}/{n_total} total)")
+
+            u_opt_all = _stack_pytrees(all_results_u)
+            losses_all = jnp.array(all_results_loss)
+            return u_opt_all, losses_all
+
+        except Exception as e:
+            error_str = str(e)
+            is_oom = ("RESOURCE_EXHAUSTED" in error_str or
+                      "out of memory" in error_str.lower() or
+                      "oom" in error_str.lower())
+
+            if is_oom and chunk_size > 1:
+                if verbose:
+                    print(f"[{phase_name}] OOM with chunk_size={chunk_size}, trying smaller chunks...")
+                jax.clear_caches()
+                gc.collect()
+                continue
+            else:
+                raise
+
+    # Should never reach here, but just in case
+    raise RuntimeError(f"[{phase_name}] All fallback strategies failed")
+
+
 def run_gradient_descent(
     prob_model,
     img: np.ndarray,
@@ -407,130 +425,35 @@ def run_gradient_descent(
     if len(loss_terms) == 1:
         loss_fn = base_loss
     else:
-        def loss_fn(u):
-            return sum(term(u) for term in loss_terms)
+        loss_fn = lambda u: sum(term(u) for term in loss_terms)
     safe_loss = make_safe_loss(loss_fn)
 
-    # Helper to stack pytrees
-    def stack_pytrees(pytrees):
-        return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *pytrees)
+    # Build phase-specific optimize functions via partial
+    optimize_phase1 = partial(
+        _single_start_optimize,
+        safe_loss,
+        do_preopt=True,
+        adam_steps=adam_steps_initial,
+        adam_lr=adam_lr,
+        adam_warmup_fraction=adam_warmup_fraction,
+        adam_grad_clip=adam_grad_clip,
+        adam_use_cosine_decay=adam_use_cosine_decay,
+        lbfgs_maxiter=lbfgs_maxiter_initial,
+        lbfgs_tol=lbfgs_tol,
+    )
 
-    # Helper function for chunked optimization with OOM fallback
-    def run_optimizations_with_chunked_fallback(
-        all_u0_list, optimize_fn, phase_name, n_devices, verbose
-    ):
-        """
-        Run optimizations with progressive fallback: full parallel -> chunked -> sequential.
-
-        Fallback chain: full batch -> chunks of 25 -> chunks of 10 -> chunks of 5 -> sequential
-        """
-        n_total = len(all_u0_list)
-        chunk_sizes_to_try = [n_total, 25, 10, 5, 1]  # Full, then progressively smaller chunks
-
-        for chunk_size in chunk_sizes_to_try:
-            if chunk_size > n_total:
-                continue
-
-            is_sequential = (chunk_size == 1)
-            is_full_batch = (chunk_size == n_total)
-
-            try:
-                # Clear caches before each attempt
-                jax.clear_caches()
-                gc.collect()
-
-                if is_sequential:
-                    if verbose:
-                        print(f"[{phase_name}] Running sequential (chunk_size=1)...")
-                    results_u, results_loss = [], []
-                    for i, u0 in enumerate(all_u0_list):
-                        u_opt, loss = optimize_fn(u0)
-                        results_u.append(u_opt)
-                        results_loss.append(float(loss))
-                        if verbose and (i + 1) % 10 == 0:
-                            print(f"[{phase_name}] Completed {i + 1}/{n_total}")
-                    u_opt_all = stack_pytrees(results_u)
-                    losses_all = jnp.array(results_loss)
-                    return u_opt_all, losses_all
-
-                if is_full_batch:
-                    if verbose:
-                        print(f"[{phase_name}] Running {n_total} parallel optimizations...")
-                else:
-                    if verbose:
-                        print(f"[{phase_name}] Running in chunks of {chunk_size}...")
-
-                # Process in chunks
-                all_results_u = []
-                all_results_loss = []
-                n_chunks = (n_total + chunk_size - 1) // chunk_size
-
-                for chunk_idx in range(n_chunks):
-                    start_idx = chunk_idx * chunk_size
-                    end_idx = min(start_idx + chunk_size, n_total)
-                    chunk_u0_list = all_u0_list[start_idx:end_idx]
-                    actual_chunk_size = len(chunk_u0_list)
-
-                    u0_stacked_chunk = stack_pytrees(chunk_u0_list)
-
-                    # Try multi-device pmap if available
-                    if n_devices > 1 and actual_chunk_size >= n_devices:
-                        starts_per_device = (actual_chunk_size + n_devices - 1) // n_devices
-                        n_padded = starts_per_device * n_devices
-
-                        # Pad if needed
-                        if n_padded > actual_chunk_size:
-                            padded_list = chunk_u0_list + [chunk_u0_list[0]] * (n_padded - actual_chunk_size)
-                            u0_stacked_chunk = stack_pytrees(padded_list)
-
-                        # Reshape for pmap
-                        u0_pmap = jax.tree_util.tree_map(
-                            lambda x, _nd=n_devices, _spd=starts_per_device: x.reshape((_nd, _spd) + x.shape[1:]),
-                            u0_stacked_chunk
-                        )
-                        pmap_opt = jax.pmap(lambda batch: jax.vmap(optimize_fn)(batch))
-                        u_opt_pmap, losses_pmap = pmap_opt(u0_pmap)
-
-                        # Flatten and trim padding
-                        u_opt_chunk = jax.tree_util.tree_map(
-                            lambda x, _np=n_padded, _acs=actual_chunk_size: x.reshape((_np,) + x.shape[2:])[:_acs],
-                            u_opt_pmap
-                        )
-                        losses_chunk = losses_pmap.reshape(-1)[:actual_chunk_size]
-                    else:
-                        # Single device: use vmap
-                        u_opt_chunk, losses_chunk = jax.vmap(optimize_fn)(u0_stacked_chunk)
-
-                    # Collect results from this chunk
-                    for i in range(actual_chunk_size):
-                        u_i = jax.tree_util.tree_map(lambda x, _i=i: x[_i], u_opt_chunk)
-                        all_results_u.append(u_i)
-                        all_results_loss.append(float(losses_chunk[i]))
-
-                    if verbose and not is_full_batch:
-                        print(f"[{phase_name}] Chunk {chunk_idx + 1}/{n_chunks} done ({end_idx}/{n_total} total)")
-
-                u_opt_all = stack_pytrees(all_results_u)
-                losses_all = jnp.array(all_results_loss)
-                return u_opt_all, losses_all
-
-            except Exception as e:
-                error_str = str(e)
-                is_oom = ("RESOURCE_EXHAUSTED" in error_str or
-                          "out of memory" in error_str.lower() or
-                          "oom" in error_str.lower())
-
-                if is_oom and chunk_size > 1:
-                    if verbose:
-                        print(f"[{phase_name}] OOM with chunk_size={chunk_size}, trying smaller chunks...")
-                    jax.clear_caches()
-                    gc.collect()
-                    continue
-                else:
-                    raise
-
-        # Should never reach here, but just in case
-        raise RuntimeError(f"[{phase_name}] All fallback strategies failed")
+    optimize_phase2 = partial(
+        _single_start_optimize,
+        safe_loss,
+        do_preopt=True,
+        adam_steps=adam_steps_refinement,
+        adam_lr=adam_lr * 0.5,  # Lower lr for refinement
+        adam_warmup_fraction=adam_warmup_fraction,
+        adam_grad_clip=adam_grad_clip,
+        adam_use_cosine_decay=adam_use_cosine_decay,
+        lbfgs_maxiter=lbfgs_maxiter_refinement,
+        lbfgs_tol=lbfgs_tol,
+    )
 
     # Track best result across all retry iterations
     best_result_overall = None
@@ -572,23 +495,9 @@ def run_gradient_descent(
             u0 = unconstrain_fn(prob_model.model, (), {}, init_params)
             all_u0_initial.append(u0)
 
-        # Define optimization function for Phase 1
-        def optimize_single_phase1(u0):
-            return _single_start_optimize(
-                safe_loss, u0,
-                do_preopt=True,
-                adam_steps=adam_steps_initial,
-                adam_lr=adam_lr,
-                adam_warmup_fraction=adam_warmup_fraction,
-                adam_grad_clip=adam_grad_clip,
-                adam_use_cosine_decay=adam_use_cosine_decay,
-                lbfgs_maxiter=lbfgs_maxiter_initial,
-                lbfgs_tol=lbfgs_tol,
-            )
-
         # Run Phase 1 with chunked fallback on OOM
-        u_opt_initial, losses_initial = run_optimizations_with_chunked_fallback(
-            all_u0_initial, optimize_single_phase1, "Phase 1", n_devices, verbose
+        u_opt_initial, losses_initial = _run_optimizations_chunked(
+            all_u0_initial, optimize_phase1, "Phase 1", n_devices, verbose
         )
 
         # Convert to numpy and find top results
@@ -642,23 +551,9 @@ def run_gradient_descent(
 
         n_refinements = len(all_u0_refinement)
 
-        # Define optimization function for Phase 2 (more iterations, lower lr)
-        def optimize_single_phase2(u0):
-            return _single_start_optimize(
-                safe_loss, u0,
-                do_preopt=True,
-                adam_steps=adam_steps_refinement,
-                adam_lr=adam_lr * 0.5,  # Lower lr for refinement
-                adam_warmup_fraction=adam_warmup_fraction,
-                adam_grad_clip=adam_grad_clip,
-                adam_use_cosine_decay=adam_use_cosine_decay,
-                lbfgs_maxiter=lbfgs_maxiter_refinement,
-                lbfgs_tol=lbfgs_tol,
-            )
-
         # Run Phase 2 with chunked fallback on OOM
-        u_opt_refinement, losses_refinement = run_optimizations_with_chunked_fallback(
-            all_u0_refinement, optimize_single_phase2, "Phase 2", n_devices, verbose
+        u_opt_refinement, losses_refinement = _run_optimizations_chunked(
+            all_u0_refinement, optimize_phase2, "Phase 2", n_devices, verbose
         )
 
         losses_refinement_np = np.asarray(losses_refinement)
