@@ -8,18 +8,18 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/hkrizic/alpaca/actions/workflows/tests.yml/badge.svg)](https://github.com/hkrizic/alpaca/actions/workflows/tests.yml)
 
-ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling and time-delay cosmography. It provides flexible source reconstruction methods and multiple Bayesian inference backends for robust parameter estimation and cosmological constraints.
+ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling and time-delay cosmography. It provides several source reconstruction methods and multiple Bayesian inference backends for robust parameter lens modelling and cosmological inference.
 
 ## Features
 
-- **Source Reconstruction**
-  - Shapelets basis decomposition
-  - Correlated Fields (Gaussian Process) reconstruction with NIFTy-inspired priors
+- **Various Source Light Profiles**
+  - Shapelets
+  - Correlated Fields (using Nifty) <- under construction
 
 - **Inference Methods**
-  - Multi-start gradient descent (Adam + L-BFGS) with automatic OOM fallback
-  - NUTS Hamiltonian Monte Carlo via NumPyro
-  - Nautilus nested sampling for evidence estimation
+  - Multi-start gradient descent (Adam + L-BFGS) for initialization
+  - NUTS Hamiltonian Monte Carlo via NumPyro or
+  - Nautilus nested sampling for full posterior sampling
 
 - **Time-Delay Cosmography**
   - Joint modeling of imaging and time delays
@@ -28,18 +28,16 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
   - Ray-shooting systematic error as a free parameter
 
 - **Model Selection**
-  - BIC scan across shapelet orders to identify optimal source complexity
-  - Automated multi-run comparison with progress plots
+  - BIC for each run is given to compare different complexities
 
 - **PSF Reconstruction**
-  - STARRED-based PSF reconstruction from lensed point sources
+  - STARRED-based PSF reconstruction
   - Iterative PSF refinement
 
 - **Performance**
-  - JAX-accelerated likelihood evaluation
-  - Multi-GPU support with pmap parallelization
-  - Automatic differentiation for HMC
-  - Automatic retry logic with chi-squared threshold
+  - JAX-accelerated likelihood evaluation in Nautilus
+  - Multi-GPU support with pmap parallelization in gradient descent
+  - Automatic differentiation for HMC and parallelized chains
 
 ## Installation
 
@@ -57,21 +55,24 @@ pip install -e ".[full]"
 
 **Core dependencies:**
 
-| Package    | Version                   | Purpose                                 |
-|------------|---------------------------|-----------------------------------------|
-| numpy      | >= 1.20                   | arrays                                  |
-| scipy      | >= 1.7                    | optimization, interpolation             |
-| matplotlib | >= 3.5                    | plotting                                |
-| astropy    | >= 5.0                    | FITS I/O, cosmology                     |
-| jax        | >= 0.4                    | autodiff, GPU acceleration              |
-| jaxlib     | >= 0.4                    | JAX backend                             |
-| numpyro    | >= 0.12                   | NUTS sampler, probabilistic model       |
-| jaxopt     | --                        | L-BFGS optimizer                        |
-| optax      | --                        | Adam optimizer, learning rate schedules  |
-| pandas     | --                        | tabular data                             |
-| getdist    | --                        | posterior analysis                       |
-| utax       | git (aymgal/utax)         | utility transforms for JAX              |
-| herculens  | git (Herculens/herculens) | differentiable lens modeling             |
+### Core Dependencies
+* **JAX** (`≥ 0.4`): Autodiff and XLA compilation.
+* **jaxlib** (`≥ 0.4`): JAX backend and GPU acceleration.
+* **NumPy** (`≥ 1.20`): Fundamental array operations.
+* **SciPy** (`≥ 1.7`): Optimization and interpolation.
+* **Pandas**: Tabular data management.
+* **Matplotlib** (`≥ 3.5`): Visualization and plotting.
+
+### Modeling & Inference
+* **NumPyro** (`≥ 0.12`): Probabilistic programming and NUTS/HMC sampling.
+* **Herculens**: Differentiable gravitational lens modeling. ([Source](https://github.com/Herculens/herculens))
+* **Astropy** (`≥ 5.0`): FITS I/O and cosmological calculations.
+* **GetDist**: MCMC sample analysis and posterior plotting.
+
+### Optimization & Utilities
+* **Optax**: Gradient processing and Adam optimization.
+* **JAXopt**: Hardware-accelerated L-BFGS and root finding.
+* **UTAX**: Parameter transformations and JAX utilities. ([Source](https://github.com/aymgal/utax))
 
 **Optional dependency groups** (`pip install -e ".[full]"` installs everything):
 
@@ -87,27 +88,7 @@ pip install -e ".[full]"
 
 ### 1. Configure the pipeline
 
-Edit `run_config.py` (or `run_config_TDC.py` for TDLMC simulation data) to set your data paths, source model, sampler, and pipeline phases:
-
-```python
-# run_config_TDC.py (excerpt)
-
-BASE_DIR = "."
-RUNG = 2
-CODE_ID = 1
-SEED = 120
-
-USE_SHAPELETS = True        # Shapelets source model
-SHAPELETS_N_MAX = 6
-
-SAMPLER = "nuts"            # "nuts", "nautilus", or "default"
-
-RUN_PSF_RECONSTRUCTION = False
-RUN_MULTISTART = True
-RUN_SAMPLING = True
-```
-
-The `load_config()` function at the bottom of each config file builds a `PipelineConfig` from these settings.
+Edit `run_config.py` (or `run_config_TDC.py` for TDLMC simulation data) to set your data paths, source model, sampler, and pipeline phases. The `load_config()` function at the bottom of each config file builds a `PipelineConfig` from these settings.
 
 ### 2. Run the pipeline
 
@@ -132,7 +113,7 @@ from alpaca.pipeline import run_pipeline, load_pipeline_results
 from run_config_TDC import load_config, load_tdlmc_data
 
 config = load_config()
-img, psf_kernel, noise_map = load_tdlmc_data()
+img, psf_kernel, noise_map = load_tdlmc_data() # <- We use here the TDC data
 
 # Run the full pipeline
 results = run_pipeline(
@@ -147,7 +128,7 @@ results = run_pipeline(
 results = load_pipeline_results(output_dir)
 ```
 
-## Configuration
+## Some more Words on Configuration
 
 ALPACA uses a dataclass-based configuration system defined in `alpaca/config.py`. The user-facing settings live in `run_config.py` (or `run_config_TDC.py`) as plain Python variables:
 
@@ -211,6 +192,31 @@ config = PipelineConfig(
     ),
 )
 ```
+## PSF Reconstruction
+
+Reconstruct the PSF using STARRED:
+
+```python
+from alpaca.psf import reconstruct_PSF, generate_isolated_ps_images
+
+# Generate isolated point source images
+isolated_images = generate_isolated_ps_images(
+    data_image,
+    prob_model,
+    best_params,
+    n_point_sources=4,
+)
+
+# Reconstruct PSF
+new_psf = reconstruct_PSF(
+    current_psf=psf_kernel,
+    peaks_px=point_source_positions,
+    noise_map=noise_map,
+    isolated_images=isolated_images,
+    cutout_size=99,
+    supersampling_factor=3,
+)
+```
 
 ## Inference Methods
 
@@ -262,31 +268,6 @@ log_evidence = results["log_evidence"]
 samples = results["samples"]
 ```
 
-## PSF Reconstruction
-
-Reconstruct the PSF from lensed point source images using STARRED:
-
-```python
-from alpaca.psf import reconstruct_PSF, generate_isolated_ps_images
-
-# Generate isolated point source images
-isolated_images = generate_isolated_ps_images(
-    data_image,
-    prob_model,
-    best_params,
-    n_point_sources=4,
-)
-
-# Reconstruct PSF
-new_psf = reconstruct_PSF(
-    current_psf=psf_kernel,
-    peaks_px=point_source_positions,
-    noise_map=noise_map,
-    isolated_images=isolated_images,
-    cutout_size=99,
-    supersampling_factor=3,
-)
-```
 
 ## Project Structure
 
