@@ -17,7 +17,7 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
   - Correlated Fields (Gaussian Process) reconstruction with NIFTy-inspired priors
 
 - **Inference Methods**
-  - Multi-start gradient descent (Adam + L-BFGS-B)
+  - Multi-start gradient descent (Adam + L-BFGS) with automatic OOM fallback
   - NUTS Hamiltonian Monte Carlo via NumPyro
   - Nautilus nested sampling for evidence estimation
 
@@ -25,6 +25,11 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
   - Joint modeling of imaging and time delays
   - Direct inference of the time-delay distance D_dt
   - Ray-shooting consistency likelihood
+  - Ray-shooting systematic error as a free parameter
+
+- **Model Selection**
+  - BIC scan across shapelet orders to identify optimal source complexity
+  - Automated multi-run comparison with progress plots
 
 - **PSF Reconstruction**
   - STARRED-based PSF reconstruction from lensed point sources
@@ -32,8 +37,9 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
 
 - **Performance**
   - JAX-accelerated likelihood evaluation
-  - GPU support for fast inference
+  - Multi-GPU support with pmap parallelization
   - Automatic differentiation for HMC
+  - Automatic retry logic with chi-squared threshold
 
 ## Installation
 
@@ -56,10 +62,10 @@ pip install -e ".[full]"
 
 ### 1. Configure the pipeline
 
-Edit `run_config.py` to set your data paths, source model, sampler, and pipeline phases:
+Edit `run_config.py` (or `run_config_TDC.py` for TDLMC simulation data) to set your data paths, source model, sampler, and pipeline phases:
 
 ```python
-# run_config.py (excerpt)
+# run_config_TDC.py (excerpt)
 
 BASE_DIR = "."
 RUNG = 2
@@ -76,18 +82,13 @@ RUN_MULTISTART = True
 RUN_SAMPLING = True
 ```
 
-The `load_config()` function at the bottom of `run_config.py` builds a `PipelineConfig` from these settings.
+The `load_config()` function at the bottom of each config file builds a `PipelineConfig` from these settings.
 
 ### 2. Run the pipeline
 
 ```bash
-python run_alpaca.py
-```
-
-Or submit to a SLURM cluster:
-
-```bash
-sbatch run_alpaca.sh
+python run_alpaca.py          # Generic data
+python run_alpaca_tdc.py      # TDLMC data
 ```
 
 The pipeline executes three phases in sequence:
@@ -100,10 +101,22 @@ The pipeline executes three phases in sequence:
 
 ```python
 from alpaca.config import PipelineConfig
-from alpaca.pipeline import run_pipeline, quick_pipeline, load_pipeline_results
+from alpaca.pipeline import run_pipeline, load_pipeline_results
 
-# Run the full pipeline with a config object
-results = run_pipeline(config=config, verbose=True)
+# Load config and data
+from run_config_TDC import load_config, load_tdlmc_data
+
+config = load_config()
+img, psf_kernel, noise_map = load_tdlmc_data()
+
+# Run the full pipeline
+results = run_pipeline(
+    config=config,
+    img=img,
+    psf_kernel=psf_kernel,
+    noise_map=noise_map,
+    verbose=True,
+)
 
 # Or load previously saved results
 results = load_pipeline_results(output_dir)
@@ -111,12 +124,12 @@ results = load_pipeline_results(output_dir)
 
 ## Configuration
 
-ALPACA uses a dataclass-based configuration system defined in `alpaca/config.py`. The user-facing settings live in `run_config.py` as plain Python variables:
+ALPACA uses a dataclass-based configuration system defined in `alpaca/config.py`. The user-facing settings live in `run_config.py` (or `run_config_TDC.py`) as plain Python variables:
 
 ```python
-from run_config import load_config
+from run_config_TDC import load_config
 
-config = load_config()  # Builds a PipelineConfig from run_config.py settings
+config = load_config()  # Builds a PipelineConfig from settings
 ```
 
 Or build a `PipelineConfig` directly:
@@ -132,10 +145,7 @@ from alpaca.config import (
 )
 
 config = PipelineConfig(
-    base_dir="/path/to/data",
-    rung=2,
-    code_id=1,
-    seed=120,
+    output_dir="results/my_run",
 
     # Source model (choose one)
     use_source_shapelets=True,
@@ -161,6 +171,8 @@ config = PipelineConfig(
         adam_steps_initial=500,
         lbfgs_maxiter_initial=600,
         use_time_delays=True,
+        max_retry_iterations=2,
+        chi2_red_threshold=2.0,
     ),
     sampler_config=SamplerConfig(
         sampler="nuts",
@@ -179,18 +191,18 @@ config = PipelineConfig(
 
 ### Gradient Descent
 
-Multi-start optimization with Adam pre-conditioning and L-BFGS-B refinement:
+Multi-start optimization with Adam pre-conditioning and L-BFGS refinement. Includes automatic retry logic when the reduced chi-squared exceeds a threshold, and progressive OOM fallback (full parallel -> chunked -> sequential):
 
 ```python
 from alpaca.sampler.gradient_descent import run_gradient_descent
 
-results = run_gradient_descent(
-    prob_model,
-    n_starts=50,
-    adam_steps=500,
-    lbfgs_maxiter=600,
+summary = run_gradient_descent(
+    prob_model, img, noise_map, outdir="results/gd",
+    n_starts_initial=50,
+    adam_steps_initial=500,
+    lbfgs_maxiter_initial=600,
 )
-best_params = results["best_params"]
+best_params = summary["best_params_json"]
 ```
 
 ### NUTS (Hamiltonian Monte Carlo)
@@ -201,8 +213,8 @@ Full posterior sampling with the No-U-Turn Sampler:
 from alpaca.sampler.nuts import run_nuts_numpyro
 
 results = run_nuts_numpyro(
-    prob_model,
-    best_params=best_params,  # Initialize near MAP
+    logdensity_fn,
+    initial_positions=init_positions,
     num_warmup=3000,
     num_samples=5000,
 )
@@ -255,9 +267,11 @@ new_psf = reconstruct_PSF(
 
 ```
 .
-├── run_alpaca.py              # Entry point: runs the pipeline and explores results
-├── run_config.py              # User-editable configuration (edit this, then run)
-├── run_alpaca.sh              # SLURM submission script for HPC clusters
+├── run_alpaca.py              # Entry point: generic data
+├── run_alpaca_tdc.py          # Entry point: TDLMC data
+├── run_config.py              # User-editable configuration (generic)
+├── run_config_TDC.py          # User-editable configuration (TDLMC)
+├── tdlmc_helper.py            # TDLMC data loading and path helpers
 ├── tests/                     # Test suite (pytest)
 │
 └── alpaca/
@@ -265,7 +279,7 @@ new_psf = reconstruct_PSF(
     ├── config.py              # Configuration dataclasses (PipelineConfig, etc.)
     │
     ├── pipeline/              # Pipeline orchestration
-    │   ├── __init__.py        #   re-exports: run_pipeline, quick_pipeline, load_pipeline_results
+    │   ├── __init__.py        #   re-exports: run_pipeline, load_pipeline_results
     │   ├── runner.py          #   main pipeline runner
     │   ├── io.py              #   output directory setup, FITS/JSON serialization
     │   ├── setup.py           #   model building, point-source matching, time-delay loading
@@ -274,15 +288,14 @@ new_psf = reconstruct_PSF(
     │       └── plotting.py    #   posterior plot generation stage
     │
     ├── data/                  # Data loading and preprocessing
-    │   ├── loader.py          #   FITS data loading
-    │   ├── setup.py           #   high-level lens setup (setup_tdlmc_lens)
+    │   ├── setup.py           #   high-level lens setup (setup_lens)
     │   ├── grids.py           #   pixel grid construction
     │   ├── masks.py           #   source arc masks (annular and custom)
     │   ├── detection.py       #   point-source image detection
     │   └── noise.py           #   noise boosting around point sources
     │
     ├── models/                # Probabilistic lens model
-    │   └── prob_model.py
+    │   └── prob_model.py      #   ProbModel (Shapelets) and ProbModelCorrField
     │
     ├── sampler/               # Optimization and sampling
     │   ├── constants.py       #   physical constants (D_dt bounds, c)
@@ -304,8 +317,7 @@ new_psf = reconstruct_PSF(
     ├── plotting/              # Visualization
     │   ├── model_plots.py     #   best-fit model and residual maps
     │   ├── posterior_plots.py #   corner plots and posterior analysis
-    │   ├── diagnostics.py     #   optimization and chain diagnostics
-    │   └── benchmarking.py    #   timing and performance plots
+    │   └── diagnostics.py     #   optimization, chain, and PSF diagnostics
     │
     ├── psf/                   # PSF reconstruction (STARRED)
     │   ├── reconstruction.py  #   main PSF reconstruction driver
