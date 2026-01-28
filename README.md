@@ -2,7 +2,7 @@
   <img src="alpaca/alpaca_logo.png" alt="ALPACA Logo" width="100%">
 </p>
 
-# ALPACA (Automated Lens-modelling Pipeline for Accelerated TD Cosmography Analysis)
+# ALPACA (Automated Lens-modelling Pipeline for Accelerated TDCosmography Analysis)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
