@@ -13,6 +13,7 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
 ## Features
 
 - **Various Source Light Profiles**
+  - Sèrsic
   - Shapelets
   - Correlated Fields (using Nifty) <- under construction
 
