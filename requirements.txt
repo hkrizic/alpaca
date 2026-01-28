@@ -1,0 +1,13 @@
+numpy>=1.20
+scipy>=1.7
+matplotlib>=3.5
+astropy>=5.0
+jax>=0.4
+jaxlib>=0.4
+numpyro>=0.12
+jaxopt
+optax
+pandas
+getdist
+utax @ git+https://github.com/aymgal/utax
+herculens @ git+https://github.com/Herculens/herculens.git

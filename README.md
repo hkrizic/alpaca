@@ -54,9 +54,34 @@ pip install -e ".[full]"
 ### Requirements
 
 - Python >= 3.10
-- JAX >= 0.4
-- NumPyro >= 0.12
-- NumPy, SciPy, Matplotlib, Astropy
+
+**Core dependencies:**
+
+| Package    | Version                   | Purpose                                 |
+|------------|---------------------------|-----------------------------------------|
+| numpy      | >= 1.20                   | arrays                                  |
+| scipy      | >= 1.7                    | optimization, interpolation             |
+| matplotlib | >= 3.5                    | plotting                                |
+| astropy    | >= 5.0                    | FITS I/O, cosmology                     |
+| jax        | >= 0.4                    | autodiff, GPU acceleration              |
+| jaxlib     | >= 0.4                    | JAX backend                             |
+| numpyro    | >= 0.12                   | NUTS sampler, probabilistic model       |
+| jaxopt     | --                        | L-BFGS optimizer                        |
+| optax      | --                        | Adam optimizer, learning rate schedules  |
+| pandas     | --                        | tabular data                             |
+| getdist    | --                        | posterior analysis                       |
+| utax       | git (aymgal/utax)         | utility transforms for JAX              |
+| herculens  | git (Herculens/herculens) | differentiable lens modeling             |
+
+**Optional dependency groups** (`pip install -e ".[full]"` installs everything):
+
+| Group      | Packages                  | Purpose                                 |
+|------------|---------------------------|-----------------------------------------|
+| `starred`  | starred-astro             | PSF reconstruction                      |
+| `nautilus` | nautilus-sampler          | nested sampling                         |
+| `nifty`    | nifty8                    | correlated fields source model          |
+| `dev`      | pytest, pytest-cov, ruff  | testing and linting                     |
+| `full`     | all of the above + corner, arviz | complete installation              |
 
 ## Quick Start
 
