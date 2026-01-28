@@ -40,10 +40,10 @@ NOISE_MAP_PATH = "./data/noise_map.fits"   # 2-D noise map (same shape as image)
 #    The first entry is the reference image for time delays.
 # =============================================================================
 IMAGE_POSITIONS = {
-    "A": (-0.520, -0.410),
-    "B": ( 0.310, -0.285),
-    "C": ( 0.205,  0.480),
-    "D": (-0.105,  0.190),
+    "A": (-0.088, -1.209),
+    "B": ( 1.328,  0.057),
+    "C": (-1.307,  0.1  ),
+    "D": (-0.052,  1.227),
 }
 
 # =============================================================================
@@ -54,9 +54,9 @@ IMAGE_POSITIONS = {
 #    Set to None to disable time-delay likelihood entirely.
 # =============================================================================
 TIME_DELAYS = {
-    "B": (10.5, 1.2),
-    "C": (20.3, 1.5),
-    "D": (42.1, 2.0),
+    "B": (-11.645, 0.25), # B-A
+    "C": (-9.403,  0.25), # C-A
+    "D": (-2.139,  0.25), # D-A
 }
 # TIME_DELAYS = None   # uncomment to run without time delays
 
