@@ -54,7 +54,6 @@ pip install -e ".[full]"
 
 - Python >= 3.10
 
-**Core dependencies:**
 
 ### Core Dependencies
 * **JAX** (`≥ 0.4`): Autodiff and XLA compilation.
