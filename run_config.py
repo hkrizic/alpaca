@@ -29,7 +29,7 @@ from alpaca.config import (
 # =============================================================================
 # OUTPUT DIRECTORY
 # =============================================================================
-OUTPUT_DIR = "./results/cfsupersamplingconv_run_{date}/"  # {date} is replaced at runtime
+OUTPUT_DIR = "./results/run_{date}/"  # {date} is replaced at runtime
 
 # =============================================================================
 # SOURCE LIGHT MODEL  (choose ONE)
