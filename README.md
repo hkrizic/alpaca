@@ -103,7 +103,7 @@ The pipeline executes three phases in sequence:
 2. **Gradient Descent Optimization** -- Multi-start MAP estimation with Adam + L-BFGS.
 3. **Posterior Sampling** -- Bayesian inference via NUTS or Nautilus.
 
-### 3. Use the pipeline programmatically
+### One can also use the pipeline programmatically
 
 ```python
 from alpaca.config import PipelineConfig
