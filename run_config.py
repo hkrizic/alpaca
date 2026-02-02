@@ -35,11 +35,11 @@ OUTPUT_DIR = "./results/cfsupersamplingconv_run_{date}/"  # {date} is replaced a
 # SOURCE LIGHT MODEL  (choose ONE)
 # =============================================================================
 # Option 1: Shapelets (analytic basis functions)
-USE_SHAPELETS = False
+USE_SHAPELETS = True
 SHAPELETS_N_MAX = 8
 
 # Option 2: Correlated Fields (pixelated source with GP prior)
-USE_CORR_FIELDS = True  # set True to use instead of Shapelets
+USE_CORR_FIELDS = False  # set True to use instead of Shapelets
 
 # =============================================================================
 # CORRELATED FIELD HYPERPARAMETERS  (only used if USE_CORR_FIELDS = True)
@@ -63,9 +63,9 @@ SAMPLER = "nuts"   # "nuts", "nautilus", or "default"
 # =============================================================================
 # PIPELINE PHASE TOGGLES
 # =============================================================================
-RUN_PSF_RECONSTRUCTION = True
+RUN_PSF_RECONSTRUCTION = False
 RUN_MULTISTART = True
-RUN_SAMPLING = False
+RUN_SAMPLING = True
 
 # =============================================================================
 # LIKELIHOOD SETTINGS
