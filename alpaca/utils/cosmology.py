@@ -22,16 +22,23 @@ from astropy import constants as cst
 
 
 def cast_ints_to_floats_in_dict(d):
-    """Recursively convert all integers in a nested dict/list to floats.
+    """
+    Recursively convert all integers in a nested dict/list to floats.
 
-    Args:
-        d: Input value (dict, list, int, float, str, or None).
+    Parameters
+    ----------
+    d : dict, list, int, float, str, or None
+        Input value to process. Dicts and lists are traversed recursively.
 
-    Returns:
+    Returns
+    -------
+    dict, list, float, str, or None
         Same structure with all int values converted to float.
 
-    Raises:
-        TypeError: If an unsupported type is encountered.
+    Raises
+    ------
+    TypeError
+        If an unsupported type is encountered.
     """
     if isinstance(d, dict):
         return {k: cast_ints_to_floats_in_dict(v) for k, v in d.items()}
@@ -48,14 +55,24 @@ def cast_ints_to_floats_in_dict(d):
 
 
 def compute_D_dt(z_lens, z_source, cosmology):
-    """Compute the time-delay distance D_dt.
+    """
+    Compute the time-delay distance D_dt.
 
-    Args:
-        z_lens: Redshift of the lens galaxy.
-        z_source: Redshift of the background source.
-        cosmology: Astropy cosmology object (e.g., FlatLambdaCDM).
+    D_dt = (1 + z_lens) * D_l * D_s / D_ls, where D_l, D_s, and D_ls are
+    angular diameter distances.
 
-    Returns:
+    Parameters
+    ----------
+    z_lens : float
+        Redshift of the lens galaxy.
+    z_source : float
+        Redshift of the background source.
+    cosmology : astropy.cosmology.Cosmology
+        Astropy cosmology object (e.g., ``FlatLambdaCDM``).
+
+    Returns
+    -------
+    float
         Time-delay distance in Mpc.
     """
     D_l = cosmology.angular_diameter_distance(z_lens).to(u.Mpc).value
@@ -66,20 +83,31 @@ def compute_D_dt(z_lens, z_source, cosmology):
 
 
 def predict_time_delay(delta_phi, z_lens, z_source, cosmology=None, D_dt=None):
-    """Predict time delay from Fermat potential difference.
+    """
+    Predict time delay from Fermat potential difference.
 
-    Args:
-        delta_phi: Fermat potential difference between images (arcsec^2).
-        z_lens: Lens redshift.
-        z_source: Source redshift.
-        cosmology: Astropy cosmology object. Required if D_dt not provided.
-        D_dt: Time-delay distance in Mpc. If None, computed from cosmology.
+    Parameters
+    ----------
+    delta_phi : float or array_like
+        Fermat potential difference between images (arcsec^2).
+    z_lens : float
+        Lens redshift.
+    z_source : float
+        Source redshift.
+    cosmology : astropy.cosmology.Cosmology, optional
+        Astropy cosmology object. Required if ``D_dt`` is not provided.
+    D_dt : float, optional
+        Time-delay distance in Mpc. If None, computed from ``cosmology``.
 
-    Returns:
+    Returns
+    -------
+    float or array_like
         Predicted time delay in days.
 
-    Raises:
-        ValueError: If neither cosmology nor D_dt is provided.
+    Raises
+    ------
+    ValueError
+        If neither ``cosmology`` nor ``D_dt`` is provided.
     """
     Mpc_to_m = 3.085677581491367e22
     s_to_days = 86400
@@ -95,17 +123,25 @@ def predict_time_delay(delta_phi, z_lens, z_source, cosmology=None, D_dt=None):
 
 
 def model_Ddt_with_pred_samples(pred_fermat_pot_samples, obs_delays, obs_errors, z_lens, z_source):
-    """NumPyro model for D_dt inference marginalizing over Fermat potential samples.
+    """
+    NumPyro model for D_dt inference marginalizing over Fermat potential samples.
 
     Uses Monte Carlo integration to marginalize over predicted Fermat potential
     samples when computing the likelihood of observed time delays.
 
-    Args:
-        pred_fermat_pot_samples: Array of shape (S, N) with S samples of N delay predictions.
-        obs_delays: Observed time delays, shape (N,).
-        obs_errors: Observational uncertainties, shape (N,).
-        z_lens: Lens redshift.
-        z_source: Source redshift.
+    Parameters
+    ----------
+    pred_fermat_pot_samples : jnp.ndarray
+        Array of shape (S, N) with S samples of N Fermat potential difference
+        predictions.
+    obs_delays : jnp.ndarray
+        Observed time delays, shape (N,).
+    obs_errors : jnp.ndarray
+        Observational uncertainties on time delays, shape (N,).
+    z_lens : float
+        Lens redshift.
+    z_source : float
+        Source redshift.
     """
     Ddt = numpyro.sample("D_dt", dist.Uniform(0.0, 15000.0))
     predicted_delays = predict_time_delay(pred_fermat_pot_samples, z_lens, z_source, D_dt=Ddt)
@@ -119,18 +155,27 @@ def model_Ddt_with_pred_samples(pred_fermat_pot_samples, obs_delays, obs_errors,
 
 
 def integrand(z, omegaM, omegaL):
-    """Integrand for comoving distance calculation in FLRW cosmology.
+    """
+    Integrand for comoving distance calculation in FLRW cosmology.
 
-    Args:
-        z: Redshift.
-        omegaM: Matter density parameter.
-        omegaL: Dark energy density parameter.
+    Parameters
+    ----------
+    z : float
+        Redshift.
+    omegaM : float
+        Matter density parameter.
+    omegaL : float
+        Dark energy density parameter.
 
-    Returns:
+    Returns
+    -------
+    float
         1/E(z) where E(z) is the dimensionless Hubble parameter.
 
-    Raises:
-        RuntimeError: If the denominator becomes negative (unphysical cosmology).
+    Raises
+    ------
+    RuntimeError
+        If the denominator becomes negative (unphysical cosmology).
     """
     omegaM = float(omegaM)
     omegaL = float(omegaL)
@@ -141,16 +186,28 @@ def integrand(z, omegaM, omegaL):
 
 
 def Ddt_2_H0(Ddt, z_lens, z_source, Omega_M, Omega_L):
-    """Convert time-delay distance to H0.
+    """
+    Convert time-delay distance to H0.
 
-    Args:
-        Ddt: Time-delay distance in Mpc.
-        z_lens: Lens redshift.
-        z_source: Source redshift.
-        Omega_M: Matter density parameter.
-        Omega_L: Dark energy density parameter.
+    Computes the Hubble constant from the time-delay distance using numerical
+    integration of the FLRW distance integrals.
 
-    Returns:
+    Parameters
+    ----------
+    Ddt : float
+        Time-delay distance in Mpc.
+    z_lens : float
+        Lens redshift.
+    z_source : float
+        Source redshift.
+    Omega_M : float
+        Matter density parameter.
+    Omega_L : float
+        Dark energy density parameter.
+
+    Returns
+    -------
+    float
         Hubble constant H0 in km/s/Mpc.
     """
     c = cst.c
@@ -161,15 +218,26 @@ def Ddt_2_H0(Ddt, z_lens, z_source, Omega_M, Omega_L):
 
 
 def Dd_2_H0(Dd, z_lens, Omega_M, Omega_L):
-    """Convert angular diameter distance to lens to H0.
+    """
+    Convert angular diameter distance to the lens to H0.
 
-    Args:
-        Dd: Angular diameter distance to lens in Mpc.
-        z_lens: Lens redshift.
-        Omega_M: Matter density parameter.
-        Omega_L: Dark energy density parameter.
+    Computes the Hubble constant from the angular diameter distance to the
+    lens using numerical integration of the FLRW distance integral.
 
-    Returns:
+    Parameters
+    ----------
+    Dd : float
+        Angular diameter distance to the lens in Mpc.
+    z_lens : float
+        Lens redshift.
+    Omega_M : float
+        Matter density parameter.
+    Omega_L : float
+        Dark energy density parameter.
+
+    Returns
+    -------
+    float
         Hubble constant H0 in km/s/Mpc.
     """
     c = cst.c

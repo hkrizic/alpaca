@@ -3,6 +3,8 @@ alpaca.pipeline.setup
 
 Pipeline setup helpers: rebuilding ProbModel with a new PSF and
 matching detected point sources to truth positions.
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -29,21 +31,23 @@ def _build_prob_model_with_psf_and_lens_image(
 
     This function creates a new LensImage with the reconstructed PSF and
     returns both the updated ProbModel and LensImage for use in the pipeline.
-    Supports both standard ProbModel (with/without Shapelets) and ProbModelCorrField.
+    Supports both standard ProbModel (with/without Shapelets) and
+    ProbModelCorrField.
 
     Parameters
     ----------
-    setup : Dict
-        Setup dictionary from setup_lens containing all model components.
+    setup : dict
+        Setup dictionary returned by ``setup_lens`` containing all model
+        components (grids, detected positions, noise map, etc.).
     psf_kernel : np.ndarray
-        New PSF kernel (e.g., from STARRED reconstruction).
+        New 2-D PSF kernel (e.g. from STARRED reconstruction).
 
     Returns
     -------
-    prob_model : ProbModel or ProbModelCorrField
-        New ProbModel using the reconstructed PSF.
-    lens_image : LensImage
-        New LensImage using the reconstructed PSF.
+    tuple of (ProbModel or ProbModelCorrField, LensImage)
+        A two-element tuple where the first element is the newly constructed
+        probabilistic model and the second is the corresponding
+        ``LensImage``, both built with the supplied *psf_kernel*.
     """
     # Get settings from existing prob_model
     base_prob_model = setup.get("prob_model")
@@ -52,6 +56,8 @@ def _build_prob_model_with_psf_and_lens_image(
     use_rayshoot_systematic_error = bool(getattr(base_prob_model, "use_rayshoot_systematic_error", False))
     rayshoot_sys_error_min = float(getattr(base_prob_model, "rayshoot_sys_error_min", 0.00005))
     rayshoot_sys_error_max = float(getattr(base_prob_model, "rayshoot_sys_error_max", 0.005))
+    use_image_pos_offset = bool(getattr(base_prob_model, "use_image_pos_offset", False))
+    image_pos_offset_sigma = float(getattr(base_prob_model, "image_pos_offset_sigma", 0.01))
 
     # Check if using Correlated Fields
     use_corr_fields = bool(getattr(base_prob_model, "use_corr_fields", False))
@@ -68,13 +74,10 @@ def _build_prob_model_with_psf_and_lens_image(
         supersampling_factor = 5
         convolution_type = "jax_scipy_fft"
 
-    # Get correlated field settings if applicable
-    corr_field_num_pixels = 80
+    # Get correlated field settings from the setup dict (stored by setup_lens)
+    corr_field_num_pixels = setup.get("corr_field_num_pixels", 80)
     corr_field_interpolation = 'fast_bilinear'
     if use_corr_fields and source_field is not None:
-        # Try to get settings from the existing source field
-        if hasattr(source_field, 'num_pixels'):
-            corr_field_num_pixels = source_field.num_pixels
         if hasattr(source_field, 'interpolation_type'):
             corr_field_interpolation = source_field.interpolation_type
 
@@ -127,6 +130,8 @@ def _build_prob_model_with_psf_and_lens_image(
             use_rayshoot_systematic_error=use_rayshoot_systematic_error,
             rayshoot_sys_error_min=rayshoot_sys_error_min,
             rayshoot_sys_error_max=rayshoot_sys_error_max,
+            use_image_pos_offset=use_image_pos_offset,
+            image_pos_offset_sigma=image_pos_offset_sigma,
         )
         # Update setup with new source field
         setup["source_field"] = new_source_field
@@ -146,6 +151,8 @@ def _build_prob_model_with_psf_and_lens_image(
             use_rayshoot_systematic_error=use_rayshoot_systematic_error,
             rayshoot_sys_error_min=rayshoot_sys_error_min,
             rayshoot_sys_error_max=rayshoot_sys_error_max,
+            use_image_pos_offset=use_image_pos_offset,
+            image_pos_offset_sigma=image_pos_offset_sigma,
         )
 
     return prob_model, lens_image_new
@@ -153,8 +160,34 @@ def _build_prob_model_with_psf_and_lens_image(
 
 def _match_point_sources(x_det, y_det, x_truth, y_truth):
     """
-    Match detected point-source positions to truth positions using
-    a minimal total squared distance assignment.
+    Match detected point-source positions to reference positions.
+
+    The matching is determined by finding the permutation that minimises the
+    total squared Euclidean distance between the two position sets (brute-force
+    over all permutations).
+
+    Parameters
+    ----------
+    x_det : array_like
+        x-coordinates of detected point sources.
+    y_det : array_like
+        y-coordinates of detected point sources.
+    x_truth : array_like
+        x-coordinates of reference (truth) positions.
+    y_truth : array_like
+        y-coordinates of reference (truth) positions.
+
+    Returns
+    -------
+    list of int
+        Permutation array ``perm`` such that detected source *i* corresponds
+        to reference source ``perm[i]``.
+
+    Raises
+    ------
+    ValueError
+        If the x/y arrays within a set have different shapes, or the detected
+        and reference sets have different lengths.
     """
     x_det = np.asarray(x_det, float)
     y_det = np.asarray(y_det, float)

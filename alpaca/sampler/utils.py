@@ -1,4 +1,7 @@
-"""Runtime environment, timing, and posterior utilities shared across samplers."""
+"""Runtime environment, timing, and posterior utilities shared across samplers.
+
+author: hkrizic
+"""
 
 import getpass
 import os
@@ -14,11 +17,10 @@ import numpy as np
 def get_environment_info() -> dict[str, object]:
     """Record computational environment metadata for reproducibility.
 
-    Args:
-        None
-
-    Returns:
-        Dictionary with JAX device config, library versions, CPU info,
+    Returns
+    -------
+    dict
+        JAX device config, library versions, CPU info,
         threading environment variables, and ISO 8601 timestamp.
     """
     info: dict[str, object] = {}
@@ -72,13 +74,16 @@ def now() -> float:
 def _nautilus_points_to_array(points):
     """Convert Nautilus posterior samples to a homogeneous array.
 
-    Args:
-        points: Posterior samples from Sampler.posterior(), either structured
-            array or standard ndarray.
+    Parameters
+    ----------
+    points : ndarray
+        Posterior samples from Sampler.posterior(), either structured
+        array or standard ndarray.
 
-    Returns:
-        Tuple of (samples, names) where samples is shape (N, D) and names
-        is a list of parameter names or None.
+    Returns
+    -------
+    tuple of (ndarray, list or None)
+        Samples array of shape (N, D) and list of parameter names or None.
     """
     if hasattr(points, "dtype") and points.dtype.names is not None:
         names = list(points.dtype.names)
@@ -92,10 +97,14 @@ def _nautilus_points_to_array(points):
 def _get_rng(random_seed):
     """Initialize a NumPy random number generator.
 
-    Args:
-        random_seed: Random seed for reproducibility. If None, uses global state.
+    Parameters
+    ----------
+    random_seed : int or None
+        Random seed for reproducibility. If None, uses global state.
 
-    Returns:
+    Returns
+    -------
+    numpy.random.RandomState or module
         Seeded RandomState instance or numpy.random module.
     """
     if random_seed is None:
@@ -107,15 +116,24 @@ def _standard_posterior_dict(engine, samples, log_likelihood, log_weights,
                              param_names=None, extra=None):
     """Construct a standardized posterior sample container.
 
-    Args:
-        engine: Inference algorithm identifier (e.g., "nautilus", "emcee").
-        samples: Parameter samples, shape (N, D).
-        log_likelihood: Log-likelihood at each sample, or None.
-        log_weights: Importance weights (nested sampling) or None for MCMC.
-        param_names: Parameter identifiers for labeling.
-        extra: Additional metadata (evidence, diagnostics, timing).
+    Parameters
+    ----------
+    engine : str
+        Inference algorithm identifier (e.g., "nautilus", "emcee").
+    samples : array-like
+        Parameter samples, shape (N, D).
+    log_likelihood : array-like or None
+        Log-likelihood at each sample, or None.
+    log_weights : array-like or None
+        Importance weights (nested sampling) or None for MCMC.
+    param_names : list of str or None
+        Parameter identifiers for labeling.
+    extra : dict or None
+        Additional metadata (evidence, diagnostics, timing).
 
-    Returns:
+    Returns
+    -------
+    dict
         Dictionary with keys: engine, samples, log_likelihood, log_weights,
         param_names, meta.
     """
@@ -137,6 +155,31 @@ def _standard_posterior_dict(engine, samples, log_likelihood, log_weights,
     )
 
 
-def _vector_to_paramdict(theta: np.ndarray, param_names):
-    """Map parameter vector to named dictionary."""
-    return {name: float(val) for name, val in zip(param_names, theta)}
+def _prepare_time_delay_inputs(measured_delays, delay_errors):
+    """Validate and normalize time-delay measurements and errors.
+
+    Parameters
+    ----------
+    measured_delays : array-like or None
+        Observed time delays relative to image 0, or None.
+    delay_errors : array-like or None
+        1-sigma uncertainties on the delays, or None.
+
+    Returns
+    -------
+    tuple of (ndarray, ndarray) or None
+        Delays and errors as 1D numpy arrays, or None if inputs are None.
+    """
+    if measured_delays is None or delay_errors is None:
+        return None
+    delays = np.atleast_1d(np.asarray(measured_delays, float))
+    errors = np.atleast_1d(np.asarray(delay_errors, float))
+    if delays.ndim != 1 or errors.ndim != 1:
+        raise ValueError("measured_delays and delay_errors must be 1D arrays.")
+    if errors.size == 1 and delays.size > 1:
+        errors = np.full_like(delays, float(errors.item()))
+    if delays.shape != errors.shape:
+        raise ValueError("measured_delays and delay_errors must have the same shape.")
+    if np.any(errors <= 0):
+        raise ValueError("delay_errors must be strictly positive.")
+    return delays, errors

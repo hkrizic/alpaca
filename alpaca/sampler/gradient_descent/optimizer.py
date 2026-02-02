@@ -2,6 +2,8 @@
 
 Implements Adam pre-conditioning and L-BFGS refinement with multi-start
 parallel execution, automatic GPU memory management, and retry logic.
+
+author: hkrizic
 """
 
 import gc
@@ -14,7 +16,6 @@ import jax.numpy as jnp
 import jaxopt
 import numpy as np
 import optax
-from herculens.Inference.loss import Loss
 from numpyro.infer.util import unconstrain_fn
 
 from alpaca.sampler.utils import now
@@ -26,13 +27,29 @@ def make_safe_loss(loss_obj):
     Replaces NaN/Inf values with large penalty (1e30) to handle singular
     regions in lens modeling where the lens equation solver fails.
 
-    Args:
-        loss_obj: Loss function mapping unconstrained parameters to scalar.
+    Parameters
+    ----------
+    loss_obj : callable
+        Loss function mapping unconstrained parameters to scalar.
 
-    Returns:
+    Returns
+    -------
+    callable
         Numerically stabilized loss function.
     """
     def _safe(uvec):
+        """Evaluate loss with NaN/Inf replacement.
+
+        Parameters
+        ----------
+        uvec : jax.Array
+            Unconstrained parameter vector.
+
+        Returns
+        -------
+        jax.Array
+            Loss value, or 1e30 if original value was non-finite.
+        """
         val = loss_obj(uvec)
         return jnp.where(jnp.isfinite(val), val, jnp.array(1e30))
 
@@ -51,22 +68,34 @@ def _adam_preopt_jax(
 ):
     """Pure JAX Adam pre-optimization compatible with vmap/pmap.
 
-    Args:
-        loss_fn: JAX-differentiable objective function.
-        u0: Initial parameters in unconstrained space.
-        n_steps: Number of gradient steps.
-        lr: Peak learning rate (after warmup).
-        warmup_fraction: Fraction of n_steps for linear warmup.
-        grad_clip: Maximum gradient norm for clipping.
-        use_cosine_decay: Use cosine annealing after warmup.
-        min_lr_fraction: Minimum lr as fraction of peak.
+    Parameters
+    ----------
+    loss_fn : callable
+        JAX-differentiable objective function.
+    u0 : jax.Array
+        Initial parameters in unconstrained space.
+    n_steps : int
+        Number of gradient steps.
+    lr : float
+        Peak learning rate (after warmup).
+    warmup_fraction : float
+        Fraction of n_steps for linear warmup.
+    grad_clip : float
+        Maximum gradient norm for clipping.
+    use_cosine_decay : bool
+        Use cosine annealing after warmup.
+    min_lr_fraction : float
+        Minimum lr as fraction of peak.
 
-    Returns:
-        Tuple of (best_params, best_loss).
+    Returns
+    -------
+    tuple of (jax.Array, float)
+        Best parameters and best loss value.
     """
     warmup_steps = int(n_steps * warmup_fraction)
     decay_steps = n_steps - warmup_steps
 
+    # Build learning rate schedule
     if use_cosine_decay and decay_steps > 0:
         schedule = optax.join_schedules(
             schedules=[
@@ -106,7 +135,22 @@ def _adam_preopt_jax(
     )
     state = opt.init(u0)
 
+    # Optimization step
     def step_fn(carry, _):
+        """Perform one Adam gradient step and track best parameters.
+
+        Parameters
+        ----------
+        carry : tuple
+            Tuple of (current params, optimizer state, best params, best loss).
+        _ : None
+            Unused scan input.
+
+        Returns
+        -------
+        tuple
+            Updated carry and current loss value for scan output.
+        """
         u, state, best_u, best_val = carry
         loss_val, g = jax.value_and_grad(loss_fn)(u)
         updates, new_state = opt.update(g, state, u)
@@ -122,6 +166,8 @@ def _adam_preopt_jax(
         return (new_u, new_state, new_best_u, new_best_val), loss_val
 
     init_loss = loss_fn(u0)
+
+    # The carry contains: current params, opt state, best params, best loss
     init_carry = (u0, state, u0, init_loss)
 
     (_, _, best_u, best_val), _ = jax.lax.scan(step_fn, init_carry, None, length=n_steps)
@@ -141,33 +187,47 @@ def _single_start_optimize(
     lbfgs_maxiter: int,
     lbfgs_tol: float,
 ):
-    """Single optimization trajectory: Adam pre-conditioning + L-BFGS refinement.
+    """
+    Single optimization trajectory: Adam pre-conditioning + L-BFGS refinement.
 
     Designed to be vmapped/pmapped across multiple starting points for
     parallel multi-start optimization.
 
-    Args:
-        loss_fn: Loss function to minimize.
-        u0: Initial unconstrained parameters (PyTree).
-        do_preopt: Whether to apply Adam pre-conditioning.
-        adam_steps: Number of Adam iterations.
-        adam_lr: Adam peak learning rate.
-        adam_warmup_fraction: Fraction of steps for warmup.
-        adam_grad_clip: Maximum gradient norm for clipping.
-        adam_use_cosine_decay: Whether to use cosine annealing.
-        lbfgs_maxiter: Maximum L-BFGS iterations.
-        lbfgs_tol: L-BFGS convergence tolerance.
+    Parameters
+    ----------
+    loss_fn : callable
+        Loss function to minimize.
+    u0 : PyTree
+        Initial unconstrained parameters.
+    do_preopt : bool
+        Whether to apply Adam pre-conditioning.
+    adam_steps : int
+        Number of Adam iterations.
+    adam_lr : float
+        Adam peak learning rate.
+    adam_warmup_fraction : float
+        Fraction of steps for warmup.
+    adam_grad_clip : float
+        Maximum gradient norm for clipping.
+    adam_use_cosine_decay : bool
+        Whether to use cosine annealing.
+    lbfgs_maxiter : int
+        Maximum L-BFGS iterations.
+    lbfgs_tol : float
+        L-BFGS convergence tolerance.
 
-    Returns:
-        Tuple of (optimized_params, final_loss).
+    Returns
+    -------
+    tuple of (PyTree, float)
+        Optimized parameters and final loss value.
     """
     # Adam pre-optimization
     if do_preopt:
         u_start, _ = _adam_preopt_jax(
             loss_fn, u0,
             n_steps=adam_steps,
-            lr=adam_lr,
-            warmup_fraction=adam_warmup_fraction,
+            lr=adam_lr, # peak learning rate
+            warmup_fraction=adam_warmup_fraction, # fraction of steps for warmup
             grad_clip=adam_grad_clip,
             use_cosine_decay=adam_use_cosine_decay,
         )
@@ -189,7 +249,21 @@ def _single_start_optimize(
 
 
 def _stack_pytrees(pytrees):
-    """Stack a list of pytrees along a new leading axis."""
+    """Stack a list of pytrees along a new leading axis.
+
+    Transforms N individual pytrees into a single pytree where each leaf
+    has an additional leading dimension of size N.
+
+    Parameters
+    ----------
+    pytrees : list of PyTree
+        List of pytrees with identical structure.
+
+    Returns
+    -------
+    PyTree
+        Single pytree with leaves stacked along axis 0.
+    """
     return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *pytrees)
 
 
@@ -201,15 +275,23 @@ def _run_optimizations_chunked(
     Fallback chain: full batch -> chunks of 25 -> chunks of 10 ->
     chunks of 5 -> sequential (chunk_size=1).
 
-    Args:
-        all_u0_list: List of initial parameter pytrees.
-        optimize_fn: Callable(u0) -> (u_opt, loss).
-        phase_name: Label for log messages.
-        n_devices: Number of JAX devices available.
-        verbose: Print progress information.
+    Parameters
+    ----------
+    all_u0_list : list of PyTree
+        Initial parameter pytrees.
+    optimize_fn : callable
+        Function mapping u0 -> (u_opt, loss).
+    phase_name : str
+        Label for log messages.
+    n_devices : int
+        Number of JAX devices available.
+    verbose : bool
+        Print progress information.
 
-    Returns:
-        Tuple of (u_opt_all, losses_all) — stacked pytree and 1-D array.
+    Returns
+    -------
+    tuple of (PyTree, jax.Array)
+        Stacked optimized parameters and 1-D loss array.
     """
     n_total = len(all_u0_list)
     chunk_sizes_to_try = [n_total, 25, 10, 5, 1]  # Full, then progressively smaller chunks
@@ -225,7 +307,7 @@ def _run_optimizations_chunked(
             # Clear caches before each attempt
             jax.clear_caches()
             gc.collect()
-
+            
             if is_sequential:
                 if verbose:
                     print(f"[{phase_name}] Running sequential (chunk_size=1)...")
@@ -264,6 +346,7 @@ def _run_optimizations_chunked(
                 if n_devices > 1 and actual_chunk_size >= n_devices:
                     starts_per_device = (actual_chunk_size + n_devices - 1) // n_devices
                     n_padded = starts_per_device * n_devices
+
 
                     # Pad if needed
                     if n_padded > actual_chunk_size:
@@ -345,6 +428,7 @@ def run_gradient_descent(
     use_rayshoot_consistency: bool = False,
     rayshoot_consistency_sigma: float = 0.0002,
     use_rayshoot_systematic_error: bool = False,
+    use_image_pos_offset: bool = False,
     max_retry_iterations: int = 1,
     chi2_red_threshold: float = 2.0,
 ) -> dict:
@@ -355,41 +439,98 @@ def run_gradient_descent(
     with perturbations. Each phase uses Adam + L-BFGS with automatic
     fallback to sequential processing if GPU memory is exhausted.
 
-    Args:
-        prob_model: Herculens probabilistic lens model.
-        img: Observed image array.
-        noise_map: Per-pixel noise standard deviation.
-        outdir: Output directory for results.
-        n_starts_initial: Number of starts in exploration phase.
-        n_top_for_refinement: Number of top results to refine.
-        n_refinement_perturbations: Perturbations per top result.
-        perturbation_scale: Scale of Gaussian perturbations.
-        random_seed: Random seed for reproducibility.
-        adam_steps_initial: Adam steps for initial phase.
-        adam_steps_refinement: Adam steps for refinement phase.
-        adam_lr: Peak Adam learning rate.
-        adam_warmup_fraction: Fraction of steps for warmup.
-        adam_grad_clip: Maximum gradient norm.
-        adam_use_cosine_decay: Use cosine annealing.
-        lbfgs_maxiter_initial: L-BFGS iterations (initial).
-        lbfgs_maxiter_refinement: L-BFGS iterations (refinement).
-        lbfgs_tol: L-BFGS convergence tolerance.
-        verbose: Print progress information.
-        measured_delays: Observed time delays for likelihood.
-        delay_errors: Time delay uncertainties.
-        use_rayshoot_consistency: Enable ray-shooting consistency loss.
-        rayshoot_consistency_sigma: Ray-shooting consistency tolerance.
-        use_rayshoot_systematic_error: Include systematic error model.
-        max_retry_iterations: Maximum optimization attempts. If chi2_red exceeds
-            threshold, restart with new random seeds. Set to 1 for no retry.
-        chi2_red_threshold: Reduced chi^2 threshold for retry. If best fit has
-            chi2_red > threshold, restart optimization (up to max_retry_iterations).
+    Parameters
+    ----------
+    prob_model : herculens ProbModel
+        Herculens probabilistic lens model.
+    img : ndarray
+        Observed image array.
+    noise_map : ndarray
+        Per-pixel noise standard deviation.
+    outdir : str
+        Output directory for results.
+    n_starts_initial : int
+        Number of starts in exploration phase.
+    n_top_for_refinement : int
+        Number of top results to refine.
+    n_refinement_perturbations : int
+        Perturbations per top result.
+    perturbation_scale : float
+        Scale of Gaussian perturbations.
+    random_seed : int
+        Random seed for reproducibility.
+    adam_steps_initial : int
+        Adam steps for initial phase.
+    adam_steps_refinement : int
+        Adam steps for refinement phase.
+    adam_lr : float
+        Peak Adam learning rate.
+    adam_warmup_fraction : float
+        Fraction of steps for warmup.
+    adam_grad_clip : float
+        Maximum gradient norm.
+    adam_use_cosine_decay : bool
+        Use cosine annealing.
+    lbfgs_maxiter_initial : int
+        L-BFGS iterations (initial).
+    lbfgs_maxiter_refinement : int
+        L-BFGS iterations (refinement).
+    lbfgs_tol : float
+        L-BFGS convergence tolerance.
+    verbose : bool
+        Print progress information.
+    measured_delays : array-like or None
+        Observed time delays for likelihood.
+    delay_errors : array-like or None
+        Time delay uncertainties.
+    use_rayshoot_consistency : bool
+        Enable ray-shooting consistency loss.
+    rayshoot_consistency_sigma : float
+        Ray-shooting consistency tolerance.
+    use_rayshoot_systematic_error : bool
+        Include systematic error model.
+    use_image_pos_offset : bool
+        Apply image position offsets for cosmography.
+    max_retry_iterations : int
+        Maximum optimization attempts. If chi2_red exceeds threshold,
+        restart with new random seeds. Set to 1 for no retry.
+    chi2_red_threshold : float
+        Reduced chi-squared threshold for retry. If best fit has
+        chi2_red > threshold, restart optimization.
 
-    Returns:
-        Dictionary with best-fit parameters, loss values, and timing info.
+    Returns
+    -------
+    dict
+        Summary of optimization results and best-fit parameters:
+        {
+            "n_starts_initial": ...,
+            "n_top_for_refinement": ...,
+            "n_refinement_perturbations": ...,
+            "total_optimizations": ...,
+            "best_loss": ...,
+            "best_chi2_red": ...,
+            "best_from_phase": ...,
+            "best_from_iteration": ...,
+            "total_iterations": ...,
+            "chi2_red_threshold": ...,
+            "best_params_json": {...},
+            "timing": {"total": ...},
+            "initial_losses": [...],
+            "initial_chi2_reds": [...],
+            "refinement_losses": [...],
+            "refinement_chi2_reds": [...],
+            "all_iterations": [
+                {
+                    "iteration": ...,
+                    "best_chi2_red": ...,
+                    "best_loss": ...,
+                    "timing": {...},
+                },
+                ...
+            ],
+        }   
     """
-    # Import loss-building helpers that remain in the main inference module
-    from alpaca.sampler.losses import _build_rayshoot_consistency_loss, _build_time_delay_loss
+    from alpaca.sampler.gradient_descent.likelihood import build_likelihood
 
     t_total_start = now()
     n_devices = jax.device_count()
@@ -407,25 +548,15 @@ def run_gradient_descent(
         print("=" * 60)
 
     # Build loss function
-    base_loss = Loss(prob_model)
-    td_loss = _build_time_delay_loss(
-        prob_model, prob_model.lens_image, measured_delays, delay_errors
+    loss_fn = build_likelihood(
+        prob_model,
+        measured_delays=measured_delays,
+        delay_errors=delay_errors,
+        use_rayshoot_consistency=use_rayshoot_consistency,
+        rayshoot_consistency_sigma=rayshoot_consistency_sigma,
+        use_rayshoot_systematic_error=use_rayshoot_systematic_error,
+        use_image_pos_offset=use_image_pos_offset,
     )
-    rayshoot_loss = _build_rayshoot_consistency_loss(
-        prob_model, prob_model.lens_image, use_rayshoot_consistency, rayshoot_consistency_sigma,
-        use_rayshoot_systematic_error=use_rayshoot_systematic_error
-    )
-
-    loss_terms = [base_loss]
-    if td_loss is not None:
-        loss_terms.append(td_loss)
-    if rayshoot_loss is not None:
-        loss_terms.append(rayshoot_loss)
-
-    if len(loss_terms) == 1:
-        loss_fn = base_loss
-    else:
-        loss_fn = lambda u: sum(term(u) for term in loss_terms)
     safe_loss = make_safe_loss(loss_fn)
 
     # Build phase-specific optimize functions via partial
@@ -662,6 +793,13 @@ def run_gradient_descent(
     with open(best_path, "w") as f:
         json.dump(best_params_json, f, indent=2)
 
+    # Build flattened arrays (Phase 1 + Phase 2 from best iteration)
+    all_chi2_reds = (best_result_overall["initial_chi2_reds"]
+                     + best_result_overall["refinement_chi2_reds"])
+    all_losses_flat = (best_result_overall["initial_losses"]
+                       + best_result_overall["refinement_losses"])
+    best_run = int(np.argmin(all_losses_flat))
+
     # Build summary
     summary = {
         "n_starts_initial": n_starts_initial,
@@ -670,6 +808,7 @@ def run_gradient_descent(
         "total_optimizations": n_starts_initial + n_refinements,
         "best_loss": best_loss,
         "best_chi2_red": best_chi2_red,
+        "best_run": best_run,
         "best_from_phase": best_phase,
         "best_from_iteration": best_iteration,
         "total_iterations": len(all_iteration_results),
@@ -678,6 +817,8 @@ def run_gradient_descent(
         "timing": {
             "total": float(t_total),
         },
+        "chi2_reds": all_chi2_reds,
+        "all_losses": all_losses_flat,
         "initial_losses": best_result_overall["initial_losses"],
         "initial_chi2_reds": best_result_overall["initial_chi2_reds"],
         "refinement_losses": best_result_overall["refinement_losses"],
@@ -719,11 +860,16 @@ def load_multistart_summary(outdir: str, verbose: bool = True):
     Loads the optimization summary JSON and corresponding best-fit parameter
     file, enabling continuation of analysis without recomputation.
 
-    Args:
-        outdir: Directory containing multi_start_summary.json.
-        verbose: Print loading status messages.
+    Parameters
+    ----------
+    outdir : str
+        Directory containing multi_start_summary.json.
+    verbose : bool
+        Print loading status messages.
 
-    Returns:
+    Returns
+    -------
+    dict
         Complete optimization summary with best-fit parameters.
     """
     import json as _json
@@ -736,8 +882,7 @@ def load_multistart_summary(outdir: str, verbose: bool = True):
     with open(summary_path) as f:
         summary = _json.load(f)
 
-    best_run = summary.get("best_run", 0)
-    best_params_path = _os.path.join(outdir, f"best_fit_params_run{best_run:02d}.json")
+    best_params_path = _os.path.join(outdir, "best_fit_params.json")
 
     if not _os.path.exists(best_params_path):
         raise FileNotFoundError(f"No best-fit file found at {best_params_path}")

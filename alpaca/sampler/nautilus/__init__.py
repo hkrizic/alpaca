@@ -2,6 +2,8 @@
 
 Provides prior construction, sampler execution, and posterior processing
 for importance nested sampling using the Nautilus algorithm.
+
+author: hkrizic
 """
 
 from alpaca.sampler.nautilus.posterior import get_nautilus_posterior

@@ -1,4 +1,7 @@
-"""Prior distribution constructors for sampler parameters."""
+"""Prior distribution constructors for sampler parameters.
+
+author: hkrizic
+"""
 
 from scipy.stats import truncnorm
 from scipy.stats import uniform as uniform_dist
@@ -11,14 +14,21 @@ def tnorm(mu, sigma, lo, hi):
     standardized clip values, simplifying prior specification for bounded
     lens model parameters.
 
-    Args:
-        mu: Distribution mean (mode for symmetric truncation).
-        sigma: Standard deviation before truncation.
-        lo: Lower bound defining the support.
-        hi: Upper bound defining the support.
+    Parameters
+    ----------
+    mu : float
+        Distribution mean (mode for symmetric truncation).
+    sigma : float
+        Standard deviation before truncation.
+    lo : float
+        Lower bound defining the support.
+    hi : float
+        Upper bound defining the support.
 
-    Returns:
-        Frozen truncated normal distribution (scipy.stats.truncnorm).
+    Returns
+    -------
+    scipy.stats.rv_frozen
+        Frozen truncated normal distribution.
     """
     a = (lo - mu) / sigma
     b = (hi - mu) / sigma
@@ -39,16 +49,25 @@ def _bounded_prior(
     over a possibly widened interval. Used internally for sampling priors
     on physically constrained parameters.
 
-    Args:
-        mu: Central value for truncated normal.
-        sigma: Scale parameter for truncated normal.
-        lo: Lower bound on parameter support.
-        hi: Upper bound on parameter support.
-        use_uniform_for_bounded: If True, return uniform instead of truncated normal.
-        uniform_widen_factor: Factor to expand the uniform support interval.
+    Parameters
+    ----------
+    mu : float
+        Central value for truncated normal.
+    sigma : float
+        Scale parameter for truncated normal.
+    lo : float
+        Lower bound on parameter support.
+    hi : float
+        Upper bound on parameter support.
+    use_uniform_for_bounded : bool
+        If True, return uniform instead of truncated normal.
+    uniform_widen_factor : float
+        Factor to expand the uniform support interval.
 
-    Returns:
-        scipy.stats distribution (truncnorm or uniform).
+    Returns
+    -------
+    scipy.stats.rv_frozen
+        Truncated normal or uniform distribution.
     """
     if use_uniform_for_bounded:
         center = 0.5 * (lo + hi)

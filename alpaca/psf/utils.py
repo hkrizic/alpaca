@@ -1,5 +1,11 @@
 """
 Utility and helper functions for PSF reconstruction.
+
+This module provides small helper functions used across the PSF reconstruction
+pipeline, including directory and FITS I/O, rotation augmentation, model image
+construction, masking, cropping/padding, and diagnostics printing.
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -17,15 +23,59 @@ from alpaca.models.prob_model import ProbModel, make_lens_image
 # Small utilities
 # ----------------------------------------------------------------------------- #
 def _ensure_dir(path: str) -> None:
+    """
+    Create a directory (and all parents) if it does not already exist.
+
+    Parameters
+    ----------
+    path : str
+        Directory path to create.
+    """
     os.makedirs(path, exist_ok=True)
 
 
 def _save_fits(path: str, array: np.ndarray, overwrite: bool = True) -> None:
+    """
+    Save a NumPy array as a FITS file.
+
+    Parameters
+    ----------
+    path : str
+        Output file path (including ``.fits`` extension).
+    array : np.ndarray
+        Array to write. Will be cast to ``float64``.
+    overwrite : bool, optional
+        Whether to overwrite an existing file. Default is True.
+    """
     arr = np.asarray(array)
     fits.writeto(path, arr.astype(np.float64), overwrite=overwrite)
 
 
 def _rotation_k_list(rotation_mode: str | None) -> list[int]:
+    """
+    Convert a rotation mode string into a list of ``np.rot90`` *k* values.
+
+    Parameters
+    ----------
+    rotation_mode : str or None
+        Rotation mode. Supported values:
+
+        - ``"none"`` / ``None`` / ``"0"`` / ``"false"`` / ``"off"`` --
+          no rotation (returns ``[0]``).
+        - ``"180"`` -- 0 and 180 degree rotations (returns ``[0, 2]``).
+        - ``"90"`` / ``"270"`` / ``"all"`` / ``"full"`` -- four 90-degree
+          rotations (returns ``[0, 1, 2, 3]``).
+
+    Returns
+    -------
+    list[int]
+        List of ``k`` values to pass to ``np.rot90``.
+
+    Raises
+    ------
+    ValueError
+        If ``rotation_mode`` is not a recognised value.
+    """
     mode = "none" if rotation_mode is None else str(rotation_mode).lower()
     if mode in ("none", "0", "false", "off"):
         return [0]
@@ -43,6 +93,32 @@ def _augment_rotations(
     *,
     rotation_mode: str | None = "none",
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """
+    Augment point source stamps with rotated copies.
+
+    For each input stamp, generates rotated copies according to
+    ``rotation_mode`` and concatenates them along the first axis. Masks
+    and variance maps are rotated consistently.
+
+    Parameters
+    ----------
+    stamps : np.ndarray
+        Array of shape ``(N, H, W)`` containing point source cutouts.
+    masks : np.ndarray or None, optional
+        Mask array of shape ``(N, H, W)``. Default is None.
+    sigma2 : np.ndarray or None, optional
+        Variance array of shape ``(N, H, W)``. Default is None.
+    rotation_mode : str or None, optional
+        Rotation mode string (see ``_rotation_k_list``). Default is
+        ``"none"``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray | None, np.ndarray | None]
+        Tuple ``(stamps_aug, masks_aug, sigma2_aug)`` with the augmented
+        arrays. If the original ``masks`` or ``sigma2`` was None, the
+        corresponding output is also None.
+    """
     stamps = np.asarray(stamps)
     k_list = _rotation_k_list(rotation_mode)
     if len(k_list) == 1:
@@ -71,7 +147,28 @@ def _build_model_images_from_best(
     best_params: dict,
     zero_point_sources: bool = False,
 ) -> np.ndarray:
-    """Build a model image from best-fit parameters."""
+    """
+    Build a model image from best-fit parameters.
+
+    Constructs a forward-model image using the probabilistic model and
+    the given parameter dictionary. Optionally zeros all point source
+    amplitudes before computing the image.
+
+    Parameters
+    ----------
+    prob_model : ProbModel
+        Probabilistic lens model.
+    best_params : dict
+        Best-fit parameter dictionary (flat key-value pairs).
+    zero_point_sources : bool, optional
+        If True, set all point source amplitudes to zero before building
+        the model image. Default is False.
+
+    Returns
+    -------
+    np.ndarray
+        2D model image array.
+    """
     kwargs = prob_model.params2kwargs(best_params)
 
     if zero_point_sources:
@@ -93,7 +190,27 @@ def _build_model_with_single_ps_zeroed(
     best_params: dict,
     ps_index: int,
 ) -> np.ndarray:
-    """Build a model image with a single point source amplitude set to zero."""
+    """
+    Build a model image with a single point source amplitude set to zero.
+
+    Constructs a forward-model image identical to the full model except
+    that the amplitude of point source ``ps_index`` is zeroed out. This
+    is used to isolate individual point sources by subtraction.
+
+    Parameters
+    ----------
+    prob_model : ProbModel
+        Probabilistic lens model.
+    best_params : dict
+        Best-fit parameter dictionary (flat key-value pairs).
+    ps_index : int
+        Index of the point source whose amplitude should be zeroed.
+
+    Returns
+    -------
+    np.ndarray
+        2D model image array with the specified point source removed.
+    """
     kwargs = prob_model.params2kwargs(best_params)
 
     kps = kwargs.get("kwargs_point_source", [{}])
@@ -114,7 +231,29 @@ def _build_model_with_single_ps_zeroed(
 
 
 def _circular_mask_centered(size: int, cy: float, cx: float, radius: int) -> np.ndarray:
-    """Return a cutout-sized mask with a zeroed circle at (cy, cx) relative to cutout."""
+    """
+    Return a cutout-sized mask with a zeroed circle at the given position.
+
+    Creates a square mask of ones and sets pixels within a circular region
+    of the specified radius centred at ``(cy, cx)`` to zero.
+
+    Parameters
+    ----------
+    size : int
+        Side length of the square mask.
+    cy : float
+        Y-coordinate of the circle centre (in cutout pixel coordinates).
+    cx : float
+        X-coordinate of the circle centre (in cutout pixel coordinates).
+    radius : int
+        Radius of the circular mask region in pixels.
+
+    Returns
+    -------
+    np.ndarray
+        2D mask of shape ``(size, size)`` with values 1.0 (keep) and
+        0.0 (masked inside the circle).
+    """
     mask = np.ones((size, size), dtype=float)
     cy = float(cy)
     cx = float(cx)
@@ -131,7 +270,24 @@ def _circular_mask_centered(size: int, cy: float, cx: float, radius: int) -> np.
 
 
 def _find_nonfinite_fields(kwargs_dict: dict) -> list[str]:
-    """Return a flat list of field names containing NaN/inf values."""
+    """
+    Return a flat list of field names containing NaN or Inf values.
+
+    Iterates over a nested dictionary of the form
+    ``{group: {name: array, ...}, ...}`` and identifies any arrays that
+    contain non-finite values.
+
+    Parameters
+    ----------
+    kwargs_dict : dict
+        Nested dictionary mapping group names to dictionaries of named
+        arrays (e.g. STARRED parameter dictionaries).
+
+    Returns
+    -------
+    list[str]
+        List of ``"group.name"`` strings for fields containing NaN or Inf.
+    """
     bad: list[str] = []
     for group, values in kwargs_dict.items():
         if not isinstance(values, dict):
@@ -144,7 +300,24 @@ def _find_nonfinite_fields(kwargs_dict: dict) -> list[str]:
 
 
 def _center_crop_or_pad(kernel: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
-    """Center-crop or zero-pad a 2D kernel to the desired shape."""
+    """
+    Centre-crop or zero-pad a 2D kernel to the desired shape.
+
+    If the kernel is larger than ``target_shape``, it is centre-cropped.
+    If it is smaller, it is zero-padded symmetrically.
+
+    Parameters
+    ----------
+    kernel : np.ndarray
+        Input 2D kernel array.
+    target_shape : tuple[int, int]
+        Desired output shape ``(height, width)``.
+
+    Returns
+    -------
+    np.ndarray
+        2D array of shape ``target_shape``.
+    """
     kernel = np.asarray(kernel, float)
     ky, kx = kernel.shape
     ty, tx = target_shape
@@ -172,7 +345,32 @@ def _build_lens_center_mask_map(
     center_y: float,
     radius_pix: float,
 ) -> np.ndarray:
-    """Return a full-frame mask (1=keep, 0=mask) around lens center."""
+    """
+    Return a full-frame mask that zeros out a circular region around the lens centre.
+
+    Creates a mask of ones with the same shape as the pixel grids, then sets
+    pixels within ``radius_pix`` of the lens centre to zero. Useful for
+    excluding the lens galaxy from PSF reconstruction.
+
+    Parameters
+    ----------
+    xgrid : np.ndarray
+        2D array of x-coordinates in arcseconds (pixel grid).
+    ygrid : np.ndarray
+        2D array of y-coordinates in arcseconds (pixel grid).
+    center_x : float
+        X-coordinate of the lens centre in arcseconds.
+    center_y : float
+        Y-coordinate of the lens centre in arcseconds.
+    radius_pix : float
+        Radius of the masked region in pixel units. Converted to arcseconds
+        internally using the pixel scale inferred from ``xgrid``.
+
+    Returns
+    -------
+    np.ndarray
+        2D mask array (1=keep, 0=masked) with the same shape as ``xgrid``.
+    """
     xgrid = np.asarray(xgrid, float)
     ygrid = np.asarray(ygrid, float)
     if radius_pix <= 0:
@@ -188,7 +386,30 @@ def _build_lens_center_mask_map(
 def _safe_normalized_residual(
     data: np.ndarray, model: np.ndarray, noise_map: np.ndarray, *, noise_map_is_sigma: bool
 ) -> np.ndarray:
-    """Return (data-model)/sigma, using noise_map as sigma or variance."""
+    """
+    Compute the normalised residual ``(data - model) / sigma``.
+
+    Safely handles zero, negative, and non-finite sigma values by setting
+    the corresponding output pixels to zero.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Observed data array.
+    model : np.ndarray
+        Model array with the same shape as ``data``.
+    noise_map : np.ndarray
+        Noise map with the same shape as ``data``.
+    noise_map_is_sigma : bool
+        If True, ``noise_map`` contains standard deviation values. If
+        False, ``noise_map`` contains variance and the square root is
+        taken internally.
+
+    Returns
+    -------
+    np.ndarray
+        Normalised residual array ``(data - model) / sigma``.
+    """
     data = np.asarray(data, float)
     model = np.asarray(model, float)
     nm = np.asarray(noise_map, float)
@@ -200,7 +421,25 @@ def _safe_normalized_residual(
 
 
 def _infer_numerics_from_prob_model(prob_model) -> tuple[int, str]:
-    """Best-effort extraction of numerics settings from an existing ProbModel."""
+    """
+    Extract numerics settings from an existing ProbModel on a best-effort basis.
+
+    Attempts to read the ``kwargs_numerics`` dictionary from the ProbModel's
+    internal ``LensImage`` object to retrieve the super-sampling factor and
+    convolution type. Falls back to sensible defaults if the attributes are
+    not found.
+
+    Parameters
+    ----------
+    prob_model : ProbModel
+        Existing probabilistic lens model.
+
+    Returns
+    -------
+    tuple[int, str]
+        A tuple ``(supersampling_factor, convolution_type)`` with defaults
+        of ``(5, "jax_scipy_fft")`` if extraction fails.
+    """
     kwargs_numerics = getattr(getattr(prob_model, "lens_image", None), "kwargs_numerics", None)
     if kwargs_numerics is None:
         kwargs_numerics = getattr(getattr(prob_model, "lens_image", None), "_kwargs_numerics", None)
@@ -212,7 +451,29 @@ def _infer_numerics_from_prob_model(prob_model) -> tuple[int, str]:
 
 
 def _build_prob_model_with_psf(setup: dict, psf_kernel: np.ndarray):
-    """Rebuild ProbModel using the same grids/noise but a different PSF kernel."""
+    """
+    Rebuild a ProbModel using the same grids and noise but a different PSF kernel.
+
+    Extracts configuration (super-sampling, convolution type, source model
+    settings) from the existing ProbModel stored in ``setup``, constructs a
+    new ``LensImage`` with the provided PSF kernel, and wraps it in a fresh
+    ``ProbModel`` instance.
+
+    Parameters
+    ----------
+    setup : dict
+        Pre-built setup dictionary from ``setup_lens``, containing keys
+        ``"prob_model"``, ``"img"``, ``"noise_map"``, ``"pixel_grid"``,
+        ``"ps_grid"``, ``"xgrid"``, ``"ygrid"``, ``"x0s"``, ``"y0s"``,
+        and ``"peak_vals"``.
+    psf_kernel : np.ndarray
+        New PSF kernel to use (2D array, should be normalised).
+
+    Returns
+    -------
+    ProbModel
+        New probabilistic lens model configured with the given PSF kernel.
+    """
     base_prob_model = setup.get("prob_model")
     supersampling_factor, convolution_type = _infer_numerics_from_prob_model(base_prob_model)
     use_source_shapelets = bool(getattr(base_prob_model, "use_source_shapelets", False))
@@ -246,7 +507,29 @@ def _build_prob_model_with_psf(setup: dict, psf_kernel: np.ndarray):
 
 
 def _make_iteration_output_dirs(outdir: str, iteration_index: int) -> dict[str, str]:
-    """Create and return a set of organized output folders for a given iteration."""
+    """
+    Create and return a set of organised output folders for a given iteration.
+
+    Creates a directory tree under ``outdir/Iteration_{iteration_index}/``
+    with sub-directories for PSF products, models, isolated images, STARRED
+    inputs/debug, residuals, and multi-start results.
+
+    Parameters
+    ----------
+    outdir : str
+        Root output directory.
+    iteration_index : int
+        1-based iteration number.
+
+    Returns
+    -------
+    dict[str, str]
+        Dictionary mapping descriptive keys (``"iteration_dir"``,
+        ``"psf_dir"``, ``"models_dir"``, ``"isolated_dir"``,
+        ``"starred_inputs_dir"``, ``"starred_debug_dir"``,
+        ``"residuals_dir"``, ``"multistart_dir"``) to their absolute
+        directory paths.
+    """
     iter_dir = os.path.join(outdir, f"Iteration_{int(iteration_index)}")
     dirs = {
         "iteration_dir": iter_dir,
@@ -264,12 +547,42 @@ def _make_iteration_output_dirs(outdir: str, iteration_index: int) -> dict[str, 
 
 
 def _print_multistart_chi2(summary: dict, prefix: str = "[Multi-start]") -> None:
-    """Print best/min reduced chi^2 from a multistart summary (if available)."""
+    """
+    Print the best and minimum reduced chi-squared from a multi-start summary.
+
+    Reads the ``"best_chi2_red"``, ``"chi2_reds"``, ``"best_run"``, and
+    ``"total_optimizations"`` fields from the summary dictionary and prints
+    a formatted diagnostic line. Does nothing if the required fields are
+    missing or empty.
+
+    Parameters
+    ----------
+    summary : dict
+        Multi-start summary dictionary as returned by
+        ``run_gradient_descent`` or ``load_multistart_summary``.
+    prefix : str, optional
+        Prefix string for the printed line. Default is ``"[Multi-start]"``.
+    """
+    # Try direct best_chi2_red field first (new two-phase format)
+    best_chi2_direct = summary.get("best_chi2_red")
+    chi2_reds = summary.get("chi2_reds", None)
+
+    if best_chi2_direct is not None and chi2_reds is not None:
+        chi2_arr = np.asarray(chi2_reds, dtype=float)
+        if chi2_arr.size == 0:
+            return
+        n_total = summary.get("total_optimizations", chi2_arr.size)
+        best_run = summary.get("best_run", int(np.nanargmin(chi2_arr)))
+        min_chi2 = float(np.nanmin(chi2_arr))
+        print(f"{prefix} best chi2_red={best_chi2_direct:.3g} "
+              f"(min={min_chi2:.3g}, run {best_run}/{n_total})")
+        return
+
+    # Fallback: index into chi2_reds via best_run
     try:
         best_run = int(summary.get("best_run"))
     except Exception:
         best_run = None
-    chi2_reds = summary.get("chi2_reds", None)
     if best_run is None or chi2_reds is None:
         return
     try:
@@ -278,10 +591,7 @@ def _print_multistart_chi2(summary: dict, prefix: str = "[Multi-start]") -> None
             return
         best_chi2 = float(chi2_arr[best_run])
         min_chi2 = float(np.nanmin(chi2_arr))
-        stop_reason = summary.get("stop_reason", None)
-        if stop_reason:
-            print(f"{prefix} best chi2_red={best_chi2:.3g} (min={min_chi2:.3g}, n={chi2_arr.size}, {stop_reason})")
-        else:
-            print(f"{prefix} best chi2_red={best_chi2:.3g} (min={min_chi2:.3g}, n={chi2_arr.size})")
+        print(f"{prefix} best chi2_red={best_chi2:.3g} "
+              f"(min={min_chi2:.3g}, n={chi2_arr.size})")
     except Exception:
         return

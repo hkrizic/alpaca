@@ -1,15 +1,17 @@
 """
 Model visualization plots for lens modeling.
 
+author: hkrizic
+
 Contains functions for plotting best-fit models, Nautilus mean models,
 PSO best models, and ray-tracing checks.
 
-Functions:
-    - plot_bestfit_model: Data/model/residual comparison plots.
-    - nautilus_mean_model_plot: Nautilus posterior mean model and residuals.
-    - pso_best_model_plot: PSO best-fit model using plot_bestfit_model.
-    - plot_model_summary_custom: Custom data/model/residual summary.
-    - plot_ray_tracing_check: Ray-trace image positions to source plane.
+Functions
+---------
+plot_model_summary_custom
+    Custom data/model/residual summary.
+plot_ray_tracing_check
+    Ray-trace image positions to source plane.
 """
 
 import os
@@ -27,7 +29,34 @@ def plot_model_summary_custom(
     title: str = "Model Summary",
     dpi: int = 300,
 ) -> None:
-    """Plot model summary: data, model, residuals."""
+    """
+    Plot model summary showing data, model, raw residuals, and normalized residuals.
+
+    Creates a four-panel figure comparing the observed image with the
+    model prediction. The third panel shows the raw difference and the
+    fourth shows the noise-normalized residual, clipped to [-5, 5] sigma.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        Observed image data (2-D array).
+    model_img : np.ndarray
+        Model-predicted image (2-D array, same shape as ``img``).
+    noise_map : np.ndarray
+        Per-pixel noise standard deviation map (2-D array, same shape as
+        ``img``). Used to compute the normalized residual.
+    save_path : str
+        File path to save the generated figure.
+    title : str, optional
+        Overall figure title, by default ``"Model Summary"``.
+    dpi : int, optional
+        Resolution for the saved figure, by default 300.
+
+    Returns
+    -------
+    None
+        The plot is saved to disk at ``save_path``.
+    """
     fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
     # Data

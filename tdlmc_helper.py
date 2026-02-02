@@ -8,6 +8,8 @@ logic that was decoupled from the generic alpaca package. It provides:
 - TDC truth file parsing
 - Time delay data loading and matching
 - Convenience functions to prepare TDC data for the generic pipeline
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -26,7 +28,30 @@ from astropy.io import fits
 # ---------------------------------------------------------------------------
 
 def tdlmc_paths(base: str, rung: int, code_id: int, seed: int) -> tuple[str, str]:
-    """Return (folder, outdir) paths for the drizzled TDLMC image and results."""
+    """
+    Return filesystem paths for TDLMC drizzled image data and results.
+
+    Constructs the standard TDLMC directory layout and creates the
+    results directory if it does not already exist.
+
+    Parameters
+    ----------
+    base : str
+        Root directory containing the ``TDC/`` and ``TDC_results/`` trees.
+    rung : int
+        TDLMC rung number (e.g. 0, 1, 2, 3).
+    code_id : int
+        Numeric lens code identifier.
+    seed : int
+        Random seed identifier for the simulation.
+
+    Returns
+    -------
+    folder : str
+        Path to the ``drizzled_image/`` directory containing the FITS files.
+    outdir : str
+        Path to the corresponding results directory (created if absent).
+    """
     code = f"code{code_id}"
     folder = os.path.join(
         base,
@@ -41,7 +66,26 @@ def tdlmc_paths(base: str, rung: int, code_id: int, seed: int) -> tuple[str, str
 
 
 def load_tdlmc_image(folder: str):
-    """Load image, PSF kernel and noise map from a TDLMC drizzled_image folder."""
+    """
+    Load image, PSF kernel, and noise map from a TDLMC drizzled_image folder.
+
+    Expects the folder to contain ``lens-image.fits``, ``psf.fits``, and
+    ``noise_map.fits``.
+
+    Parameters
+    ----------
+    folder : str
+        Path to the ``drizzled_image/`` directory.
+
+    Returns
+    -------
+    img : np.ndarray
+        2-D lens image cast to ``float64``.
+    psf_kernel : np.ndarray
+        2-D PSF kernel cast to ``float64``.
+    noise_map : np.ndarray
+        2-D noise map cast to ``float64``.
+    """
     img = fits.getdata(os.path.join(folder, "lens-image.fits"), header=False).astype(
         np.float64
     )
@@ -59,7 +103,28 @@ def load_tdlmc_image(folder: str):
 # ---------------------------------------------------------------------------
 
 def cast_ints_to_floats_in_dict(d):
-    """Recursively convert all integers in a nested dict/list to floats."""
+    """
+    Recursively convert all integers in a nested dict/list to floats.
+
+    Traverses dicts, lists, and scalar values.  Strings, floats, and
+    ``None`` are passed through unchanged.
+
+    Parameters
+    ----------
+    d : dict, list, int, float, str, or None
+        The nested structure to convert.
+
+    Returns
+    -------
+    dict, list, float, str, or None
+        A copy of *d* with every ``int`` replaced by ``float``.
+
+    Raises
+    ------
+    TypeError
+        If *d* contains a type that is not dict, list, int, float, str,
+        or None.
+    """
     if isinstance(d, dict):
         return {k: cast_ints_to_floats_in_dict(v) for k, v in d.items()}
     elif isinstance(d, list):
@@ -75,7 +140,28 @@ def cast_ints_to_floats_in_dict(d):
 
 
 def parse_lens_info_file(filepath):
-    """Parse a TDC 'evil team' lens info text file."""
+    """
+    Parse a TDC 'evil team' lens info text file.
+
+    Extracts cosmological parameters, redshifts, lens mass and light
+    models, source light properties, AGN positions and amplitudes,
+    time delays, velocity dispersion, and external convergence from the
+    open-box ``lens_all_info.txt`` file.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the ``lens_all_info.txt`` file.
+
+    Returns
+    -------
+    dict
+        Nested dictionary with keys including ``"cosmology"``,
+        ``"redshifts"``, ``"lens_mass_model"``, ``"lens_light"``,
+        ``"source_light"``, ``"AGN_light"``, ``"time_delays_BCD_minus_A"``,
+        ``"time_delay_distance"``, ``"velocity_dispersion"``, and
+        ``"kappa_ext"``.  All integer values are cast to floats.
+    """
     def extract_value(pattern, text, eval_type=float, default=None):
         match = re.search(pattern, text)
         if match:
@@ -167,7 +253,27 @@ def parse_lens_info_file(filepath):
 
 
 def parse_good_team_lens_info_file(filepath):
-    """Parse a TDC 'good team' lens info text file."""
+    """
+    Parse a TDC 'good team' lens info text file.
+
+    Extracts the measured quantities available to modelers: pixel size,
+    zeropoint, redshifts, external convergence with error, velocity
+    dispersion with error, and time delays with errors.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the ``lens_info_for_Good_team.txt`` file.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys ``"pixel_size"``, ``"zeropoint_AB"``,
+        ``"redshifts"``, ``"external_convergence"``,
+        ``"velocity_dispersion"``, and ``"time_delays_BCD_minus_A"``
+        (each containing ``"values"`` and ``"errors"`` sub-keys where
+        applicable).
+    """
     with open(filepath) as f:
         content = f.read()
 
@@ -224,15 +330,56 @@ def parse_good_team_lens_info_file(filepath):
 
 def load_time_delay_data(base_dir, rung, code_id, seed, x0s, y0s, verbose=False,
                           fallback_to_truth=False):
-    """Load measured time delays from TDC files and align to detected image ordering.
+    """
+    Load measured time delays from TDC files and align to detected image ordering.
+
+    Reads the good-team file for measured delays and errors, and the
+    open-box file for truth image positions.  The detected positions
+    ``(x0s, y0s)`` are matched to the truth positions via
+    ``_match_point_sources`` to establish the correct label ordering.
+
+    Parameters
+    ----------
+    base_dir : str
+        Root directory containing the ``TDC/`` tree.
+    rung : int
+        TDLMC rung number.
+    code_id : int
+        Numeric lens code identifier.
+    seed : int
+        Random seed identifier for the simulation.
+    x0s : array-like
+        Detected point-source x positions in arcsec.
+    y0s : array-like
+        Detected point-source y positions in arcsec.
+    verbose : bool, optional
+        If ``True``, print the image-label mapping to stdout.
+    fallback_to_truth : bool, optional
+        If ``True`` and the number of detected images does not match the
+        truth, use truth positions instead of raising an error.
 
     Returns
     -------
     measured_delays : np.ndarray
+        Time delays relative to the reference image, in days.
     delay_errors : np.ndarray
-    det_labels : list
+        1-sigma errors on the measured delays, in days.
+    det_labels : list of str
+        Image labels (e.g. ``["A", "B", "C", "D"]``) ordered to match
+        the detected image positions.
     used_fallback : bool
-    truth_positions : tuple or None
+        ``True`` if truth positions were substituted for detected ones.
+    truth_positions : tuple of (np.ndarray, np.ndarray) or None
+        ``(x_truth, y_truth)`` if fallback was used, otherwise ``None``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the good-team or open-box info file is missing.
+    ValueError
+        If time delays cannot be parsed, if the number of detected and
+        truth images disagree (and *fallback_to_truth* is ``False``),
+        or if there are fewer than 2 or more than 4 images.
     """
     from alpaca.pipeline.setup import _match_point_sources
 
@@ -333,10 +480,32 @@ def load_time_delay_data(base_dir, rung, code_id, seed, x0s, y0s, verbose=False,
 # ---------------------------------------------------------------------------
 
 def load_tdlmc_truth_values(base_dir, rung, code_id, seed):
-    """Load truth parameter values from TDC open-box file for corner plot markers.
+    """
+    Load truth parameter values from TDC open-box file for corner plot markers.
 
-    Returns dict mapping parameter names to truth values, suitable for passing
-    as truth_values to corner plot functions.
+    Parses the open-box ``lens_all_info.txt`` file to extract the true
+    Einstein radius, power-law slope, ellipticity components, lens light
+    effective radius, Sersic index, and light ellipticities.
+
+    Parameters
+    ----------
+    base_dir : str
+        Root directory containing the ``TDC/`` tree.
+    rung : int
+        TDLMC rung number.
+    code_id : int
+        Numeric lens code identifier.
+    seed : int
+        Random seed identifier for the simulation.
+
+    Returns
+    -------
+    dict
+        Mapping of parameter names (e.g. ``"lens_theta_E"``,
+        ``"lens_gamma"``, ``"lens_e1"``, ``"lens_e2"``,
+        ``"light_Re_L"``, ``"light_n_L"``, ``"light_e1_L"``,
+        ``"light_e2_L"``) to their truth values.  Suitable for passing
+        as *truth_values* to corner plot functions.
     """
     code = f"code{code_id}"
     truth_file = os.path.join(

@@ -1,7 +1,10 @@
-"""Bayesian Information Criterion (BIC) computation utilities.
+"""
+Bayesian Information Criterion (BIC) computation utilities.
 
 Provides functions to compute BIC from posterior samples or pipeline results,
 used for model comparison in gravitational lens modeling.
+
+author: hkrizic
 """
 
 
@@ -9,29 +12,38 @@ import numpy as np
 
 
 def compute_bic(posterior: dict, n_pixels: int, n_params: int = None) -> float:
-    """Compute the Bayesian Information Criterion from posterior samples.
+    """
+    Compute the Bayesian Information Criterion from posterior samples.
 
     BIC = k * ln(N) - 2 * ln(L_max), where k is number of parameters,
     N is number of data points, L_max is maximum likelihood.
 
-    Args:
-        posterior: Standardized posterior dict with 'log_likelihood' and
-            optionally 'param_names'.
-        n_pixels: Number of pixels (data points).
-        n_params: Number of free parameters. If None, inferred from param_names.
+    Parameters
+    ----------
+    posterior : dict
+        Standardized posterior dict with 'log_likelihood' and
+        optionally 'param_names'.
+    n_pixels : int
+        Number of pixels (data points).
+    n_params : int, optional
+        Number of free parameters. If None, inferred from param_names.
 
-    Returns:
+    Returns
+    -------
+    float
         BIC value (lower is better).
 
-    Raises:
-        ValueError: If posterior lacks log_likelihood field.
+    Raises
+    ------
+    ValueError
+        If posterior lacks log_likelihood field.
     """
     log_likelihood = posterior.get("log_likelihood")
     if log_likelihood is None:
         raise ValueError("Posterior must contain 'log_likelihood' field for BIC computation.")
 
     log_likelihood = np.asarray(log_likelihood)
-    log_L_max = np.max(log_likelihood)
+    log_L_max = np.max(log_likelihood) # Take best log-likelihood value for BIC computation 
 
     if n_params is None:
         param_names = posterior.get("param_names", [])
@@ -42,16 +54,27 @@ def compute_bic(posterior: dict, n_pixels: int, n_params: int = None) -> float:
 
 
 def compute_bic_from_results(results: dict) -> dict:
-    """Compute BIC from pipeline results dictionary.
+    """
+    Compute BIC from pipeline results dictionary.
 
-    Args:
-        results: Results dict from run_pipeline with 'posterior' and 'setup'.
+    Extracts the posterior, image data, and configuration from the pipeline
+    results and computes BIC along with associated metadata.
 
-    Returns:
-        Dictionary with bic, n_params, n_pixels, log_L_max, shapelets_n_max.
+    Parameters
+    ----------
+    results : dict
+        Results dict from ``run_pipeline`` with 'posterior' and 'setup'.
 
-    Raises:
-        ValueError: If results lacks required fields.
+    Returns
+    -------
+    dict
+        Dictionary with keys 'bic', 'n_params', 'n_pixels', 'log_L_max',
+        and 'shapelets_n_max'.
+
+    Raises
+    ------
+    ValueError
+        If results lacks required fields such as 'posterior' or image data.
     """
     posterior = results.get("posterior")
     if posterior is None:

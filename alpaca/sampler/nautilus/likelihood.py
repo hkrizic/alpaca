@@ -1,9 +1,17 @@
-"""Likelihood construction for Bayesian lens model inference.
+"""Likelihood construction for Nautilus nested sampling.
 
-Provides factory functions that build log-likelihood callables for use with
-nested sampling (Nautilus) and JAX-accelerated inference.
+Builds the log-likelihood callable used exclusively by the Nautilus sampler.
+Operates in constrained (physical) parameter space -- Nautilus samples directly
+in the prior volume, so no unconstrain/constrain step is needed here. Includes
+both a NumPy version (scalar/batched Python loop) and a JAX version (vmap/pmap
+across GPUs) for accelerated batch evaluation.
 
-Extracted during package restructuring.
+Note: NUTS and gradient descent define their own likelihoods separately because
+they operate in unconstrained parameter space and use different parameter
+transformation pipelines (NumPyro constrain_fn and prob_model.constrain,
+respectively).
+
+author: hkrizic
 """
 
 
@@ -11,10 +19,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from alpaca.sampler.constants import C_KM_S
-from alpaca.sampler.losses import (
-    _prepare_time_delay_inputs,
-)
+from alpaca.sampler.utils import _prepare_time_delay_inputs
+
+C_KM_S = 299792.458  # speed of light in km/s
 
 # ======================================================================
 # PARAMETER DICTIONARY TRANSFORMERS
@@ -27,16 +34,35 @@ def make_paramdict_to_kwargs(best_flat: dict, nps: int):
     structure required by LensImage.model(). Missing parameters are filled
     from the reference best_flat dictionary.
 
-    Args:
-        best_flat: Reference parameter dictionary with default values.
-        nps: Number of point source images.
+    Parameters
+    ----------
+    best_flat : dict
+        Reference parameter dictionary with default values.
+    nps : int
+        Number of point source images.
 
-    Returns:
+    Returns
+    -------
+    callable
         Function mapping {param_name: value} to Herculens kwargs. If
         return_extras=True, returns (kwargs, extras) with D_dt.
     """
 
     def paramdict_to_kwargs(d: dict, return_extras: bool = False):
+        """Map flat parameter dictionary to Herculens forward model kwargs.
+
+        Parameters
+        ----------
+        d : dict
+            Parameter dictionary from sampler.
+        return_extras : bool
+            If True, also return extra parameters (e.g., D_dt).
+
+        Returns
+        -------
+        dict or tuple of (dict, dict)
+            Herculens kwargs, optionally with extras dict.
+        """
         P = dict(best_flat)
         P.update({k: d[k] for k in d.keys() if k in P})
 
@@ -108,6 +134,13 @@ def make_paramdict_to_kwargs(best_flat: dict, nps: int):
         else:
             kwargs_point = None
 
+        # ---- Image position offsets (reconstruct arrays from individual params) ----
+        if nps and f"offset_x_image_0" in P:
+            offset_x = np.array([P[f"offset_x_image_{i}"] for i in range(nps)])
+            offset_y = np.array([P[f"offset_y_image_{i}"] for i in range(nps)])
+            P["offset_x_image"] = offset_x
+            P["offset_y_image"] = offset_y
+
         kwargs = dict(
             kwargs_lens=kwargs_lens,
             kwargs_source=kwargs_source,
@@ -131,17 +164,36 @@ def make_paramdict_to_kwargs_jax(best_flat: dict, nps: int):
     throughout, enabling use within jit-compiled, vmapped, or pmapped
     likelihood functions without host-device synchronization.
 
-    Args:
-        best_flat: Reference parameter dictionary with default values.
-        nps: Number of point source images.
+    Parameters
+    ----------
+    best_flat : dict
+        Reference parameter dictionary with default values.
+    nps : int
+        Number of point source images.
 
-    Returns:
+    Returns
+    -------
+    callable
         JAX-traceable function mapping parameters to Herculens kwargs. If
         return_extras=True, returns (kwargs, extras) with D_dt.
     """
     best_flat_jax = {k: jnp.asarray(v) for k, v in best_flat.items()}
 
     def paramdict_to_kwargs_jax(params: dict, return_extras: bool = False):
+        """Map flat parameter dictionary to Herculens kwargs using JAX arrays.
+
+        Parameters
+        ----------
+        params : dict
+            Parameter dictionary from sampler (JAX-traceable).
+        return_extras : bool
+            If True, also return extra parameters (e.g., D_dt).
+
+        Returns
+        -------
+        dict or tuple of (dict, dict)
+            Herculens kwargs, optionally with extras dict.
+        """
         # Merge sampled params with defaults from best_flat
         P = {k: params.get(k, best_flat_jax[k]) for k in best_flat_jax.keys()}
 
@@ -217,6 +269,14 @@ def make_paramdict_to_kwargs_jax(best_flat: dict, nps: int):
         else:
             kwargs_point = None
 
+        # ---- Image position offsets (reconstruct arrays from individual params) ----
+        # Check if individual offset params exist (from Nautilus prior)
+        if nps and f"offset_x_image_0" in P:
+            offset_x_list = [P[f"offset_x_image_{i}"] for i in range(nps)]
+            offset_y_list = [P[f"offset_y_image_{i}"] for i in range(nps)]
+            P["offset_x_image"] = jnp.stack(offset_x_list)
+            P["offset_y_image"] = jnp.stack(offset_y_list)
+
         kwargs = dict(
             kwargs_lens=kwargs_lens,
             kwargs_source=kwargs_source,
@@ -249,6 +309,7 @@ def build_gaussian_loglike(
     use_source_position_rayshoot: bool = True,
     use_rayshoot_systematic_error: bool = False,
     use_corr_fields: bool = False,
+    use_image_pos_offset: bool = False,
 ):
     """Construct Gaussian pixel likelihood for lens model inference.
 
@@ -261,21 +322,38 @@ def build_gaussian_loglike(
     Supports both scalar evaluation and batched calls for nested sampling.
     Optionally adds Gaussian time-delay and ray shooting consistency terms.
 
-    Args:
-        lens_image: Herculens forward model instance.
-        img: Observed image data d.
-        noise_map: Per-pixel noise standard deviation sigma.
-        paramdict_to_kwargs: Parameter transformer for forward model.
-        measured_delays: Time-delay measurements relative to image 0.
-        delay_errors: 1sigma uncertainties for time delays.
-        use_rayshoot_consistency: Add ray shooting consistency term.
-        rayshoot_consistency_sigma: Standard deviation (arcsec) for rayshoot term.
-        use_source_position_rayshoot: Compare to sampled source position (True)
-            or mean of ray-traced positions (False). Forced False for CorrFields.
-        use_rayshoot_systematic_error: Include systematic error parameter.
-        use_corr_fields: Model uses Correlated Fields (forces mean-based rayshoot).
+    Parameters
+    ----------
+    lens_image : herculens LensImage
+        Herculens forward model instance.
+    img : ndarray
+        Observed image data d.
+    noise_map : ndarray
+        Per-pixel noise standard deviation sigma.
+    paramdict_to_kwargs : callable
+        Parameter transformer for forward model.
+    measured_delays : array-like or None
+        Time-delay measurements relative to image 0.
+    delay_errors : array-like or None
+        1-sigma uncertainties for time delays.
+    use_rayshoot_consistency : bool
+        Add ray shooting consistency term.
+    rayshoot_consistency_sigma : float
+        Standard deviation (arcsec) for rayshoot term.
+    use_source_position_rayshoot : bool
+        Compare to sampled source position (True) or mean of ray-traced
+        positions (False). Forced False for CorrFields.
+    use_rayshoot_systematic_error : bool
+        Include systematic error parameter.
+    use_corr_fields : bool
+        Model uses Correlated Fields (forces mean-based rayshoot).
+    use_image_pos_offset : bool
+        Apply offset_x/y_image to positions for TD/rayshoot terms only
+        (accounts for astrometric errors in cosmography).
 
-    Returns:
+    Returns
+    -------
+    callable
         Log-likelihood function accepting parameter dictionaries.
     """
     # For Correlated Fields models, force use of mean (no src_center_x/y params)
@@ -286,7 +364,7 @@ def build_gaussian_loglike(
     const_term = np.log(2.0 * np.pi * sigma2)
     td_data = _prepare_time_delay_inputs(measured_delays, delay_errors)
     use_time_delays = td_data is not None
-    
+
     if use_time_delays:
         measured_td, errors_td = td_data
         kwargs_ref, extras_ref = paramdict_to_kwargs({}, return_extras=True)
@@ -310,7 +388,18 @@ def build_gaussian_loglike(
     mass_model = lens_image.MassModel
 
     def _single_loglike(sample_dict: dict) -> float:
-        """Standard scalar log-likelihood for one parameter point."""
+        """Compute scalar log-likelihood for a single parameter point.
+
+        Parameters
+        ----------
+        sample_dict : dict
+            Parameter dictionary with scalar values.
+
+        Returns
+        -------
+        float
+            Log-likelihood value.
+        """
         kw = paramdict_to_kwargs(sample_dict)
         model = lens_image.model(**kw)
         r = (img - model)[good]
@@ -321,6 +410,21 @@ def build_gaussian_loglike(
                 return -np.inf
             ra = kw["kwargs_point_source"][0]["ra"]
             dec = kw["kwargs_point_source"][0]["dec"]
+            # Apply image position offsets for cosmography (not imaging)
+            # Offsets can come as array (GD/NUTS) or individual params (Nautilus)
+            if use_image_pos_offset:
+                if "offset_x_image" in sample_dict:
+                    offset_x = np.asarray(sample_dict["offset_x_image"])
+                    offset_y = np.asarray(sample_dict["offset_y_image"])
+                elif "offset_x_image_0" in sample_dict:
+                    nps_off = len(ra)
+                    offset_x = np.array([sample_dict[f"offset_x_image_{i}"] for i in range(nps_off)])
+                    offset_y = np.array([sample_dict[f"offset_y_image_{i}"] for i in range(nps_off)])
+                else:
+                    offset_x = offset_y = None
+                if offset_x is not None:
+                    ra = ra + offset_x
+                    dec = dec + offset_y
             phi = lens_image.MassModel.fermat_potential(ra, dec, kw["kwargs_lens"])
             delta_phi = phi[1:] - phi[0]
             dt_pred = (C_KM_S / D_dt) * delta_phi
@@ -330,6 +434,20 @@ def build_gaussian_loglike(
             # Ray shoot image positions to source plane
             ra = kw["kwargs_point_source"][0]["ra"]
             dec = kw["kwargs_point_source"][0]["dec"]
+            # Apply image position offsets for cosmography (not imaging)
+            if use_image_pos_offset:
+                if "offset_x_image" in sample_dict:
+                    offset_x = np.asarray(sample_dict["offset_x_image"])
+                    offset_y = np.asarray(sample_dict["offset_y_image"])
+                elif "offset_x_image_0" in sample_dict:
+                    nps_off = len(ra)
+                    offset_x = np.array([sample_dict[f"offset_x_image_{i}"] for i in range(nps_off)])
+                    offset_y = np.array([sample_dict[f"offset_y_image_{i}"] for i in range(nps_off)])
+                else:
+                    offset_x = offset_y = None
+                if offset_x is not None:
+                    ra = ra + offset_x
+                    dec = dec + offset_y
             x_src, y_src = mass_model.ray_shooting(ra, dec, kw["kwargs_lens"])
             if use_source_position_rayshoot:
                 # Use sampled source position as reference
@@ -350,8 +468,21 @@ def build_gaussian_loglike(
         return float(ll)
 
     def loglike(sample_dict: dict):
-        """
-        Nautilus entry point. Detects if input is batched or scalar.
+        """Evaluate log-likelihood for scalar or batched parameter inputs.
+
+        Nautilus entry point that auto-detects whether the input is a
+        single parameter set or a batch of parameter sets.
+
+        Parameters
+        ----------
+        sample_dict : dict
+            Parameter dictionary with scalar or array values. If any
+            value has ndim > 0, input is treated as batched.
+
+        Returns
+        -------
+        float or ndarray
+            Scalar log-likelihood or 1-D array of log-likelihoods.
         """
         # Detect batched input: any parameter given as a 1D+ array
         n_batch = None
@@ -409,6 +540,7 @@ def build_gaussian_loglike_jax(
     use_source_position_rayshoot: bool = True,
     use_rayshoot_systematic_error: bool = False,
     use_corr_fields: bool = False,
+    use_image_pos_offset: bool = False,
 ):
     """GPU-accelerated Gaussian likelihood with multi-device support.
 
@@ -417,22 +549,40 @@ def build_gaussian_loglike_jax(
     data parallelism across multiple accelerators (pmap). Optionally adds
     Gaussian time-delay and ray shooting consistency terms.
 
-    Args:
-        lens_image: Herculens forward model instance.
-        img: Observed image data.
-        noise_map: Per-pixel noise standard deviation.
-        paramdict_to_kwargs_jax: JAX-compatible parameter transformer.
-        use_multi_device: Enable pmap distribution across available devices.
-        measured_delays: Time-delay measurements relative to image 0.
-        delay_errors: 1sigma uncertainties for time delays.
-        use_rayshoot_consistency: Add ray shooting consistency term.
-        rayshoot_consistency_sigma: Standard deviation (arcsec) for rayshoot term.
-        use_source_position_rayshoot: Compare to sampled source position (True)
-            or mean of ray-traced positions (False). Forced False for CorrFields.
-        use_rayshoot_systematic_error: Include systematic error parameter.
-        use_corr_fields: Model uses Correlated Fields (forces mean-based rayshoot).
+    Parameters
+    ----------
+    lens_image : herculens LensImage
+        Herculens forward model instance.
+    img : ndarray
+        Observed image data.
+    noise_map : ndarray
+        Per-pixel noise standard deviation.
+    paramdict_to_kwargs_jax : callable
+        JAX-compatible parameter transformer.
+    use_multi_device : bool
+        Enable pmap distribution across available devices.
+    measured_delays : array-like or None
+        Time-delay measurements relative to image 0.
+    delay_errors : array-like or None
+        1-sigma uncertainties for time delays.
+    use_rayshoot_consistency : bool
+        Add ray shooting consistency term.
+    rayshoot_consistency_sigma : float
+        Standard deviation (arcsec) for rayshoot term.
+    use_source_position_rayshoot : bool
+        Compare to sampled source position (True) or mean of ray-traced
+        positions (False). Forced False for CorrFields.
+    use_rayshoot_systematic_error : bool
+        Include systematic error parameter.
+    use_corr_fields : bool
+        Model uses Correlated Fields (forces mean-based rayshoot).
+    use_image_pos_offset : bool
+        Apply offset_x/y_image to positions for TD/rayshoot terms only
+        (accounts for astrometric errors in cosmography).
 
-    Returns:
+    Returns
+    -------
+    callable
         Accelerated log-likelihood function.
     """
     # For Correlated Fields models, force use of mean (no src_center_x/y params)
@@ -472,13 +622,46 @@ def build_gaussian_loglike_jax(
     sigma2_rayshoot_fixed = jnp.asarray(rayshoot_consistency_sigma ** 2)
 
     def _potential_jax(x, y, kwargs_lens):
+        """Compute the lensing potential at image positions.
+
+        Parameters
+        ----------
+        x : jax.Array
+            x-coordinates of image positions.
+        y : jax.Array
+            y-coordinates of image positions.
+        kwargs_lens : list of dict
+            Keyword arguments for each lens mass component.
+
+        Returns
+        -------
+        jax.Array
+            Lensing potential evaluated at the given positions.
+        """
         potential = jnp.zeros_like(x)
         for i, func in enumerate(mass_model.func_list):
             potential = potential + func.function(x, y, **kwargs_lens[i])
         return potential
 
     def _fermat_potential_jax(x_image, y_image, kwargs_lens):
-        # JAX-friendly equivalent of MassModel.fermat_potential.
+        """Compute the Fermat potential at image positions.
+
+        JAX-friendly equivalent of MassModel.fermat_potential.
+
+        Parameters
+        ----------
+        x_image : jax.Array
+            x-coordinates of image positions.
+        y_image : jax.Array
+            y-coordinates of image positions.
+        kwargs_lens : list of dict
+            Keyword arguments for each lens mass component.
+
+        Returns
+        -------
+        jax.Array
+            Fermat potential at the given image positions.
+        """
         potential = _potential_jax(x_image, y_image, kwargs_lens)
         x_source, y_source = mass_model.ray_shooting(x_image, y_image, kwargs_lens)
         geometry = 0.5 * ((x_image - x_source) ** 2 + (y_image - y_source) ** 2)
@@ -486,6 +669,18 @@ def build_gaussian_loglike_jax(
 
     # ----- 1. Scalar log-likelihood (one parameter set) -----
     def _loglike_single(params_dict: dict):
+        """Compute JAX scalar log-likelihood for one parameter set.
+
+        Parameters
+        ----------
+        params_dict : dict
+            Parameter dictionary with JAX array values.
+
+        Returns
+        -------
+        jax.Array
+            Scalar log-likelihood value.
+        """
         if use_time_delays:
             kw, extras = paramdict_to_kwargs_jax(params_dict, return_extras=True)
             D_dt = extras["D_dt"]
@@ -498,6 +693,21 @@ def build_gaussian_loglike_jax(
         if use_time_delays:
             ra = kw["kwargs_point_source"][0]["ra"]
             dec = kw["kwargs_point_source"][0]["dec"]
+            # Apply image position offsets for cosmography (not imaging)
+            # Offsets can come as array (GD/NUTS) or individual params (Nautilus)
+            if use_image_pos_offset:
+                if "offset_x_image" in params_dict:
+                    offset_x = params_dict["offset_x_image"]
+                    offset_y = params_dict["offset_y_image"]
+                elif "offset_x_image_0" in params_dict:
+                    nps_off = ra.shape[0]
+                    offset_x = jnp.stack([params_dict[f"offset_x_image_{i}"] for i in range(nps_off)])
+                    offset_y = jnp.stack([params_dict[f"offset_y_image_{i}"] for i in range(nps_off)])
+                else:
+                    offset_x = jnp.zeros_like(ra)
+                    offset_y = jnp.zeros_like(dec)
+                ra = ra + offset_x
+                dec = dec + offset_y
             phi = _fermat_potential_jax(ra, dec, kw["kwargs_lens"])
             delta_phi = phi[1:] - phi[0]
             dt_pred = (c_km_s / D_dt) * delta_phi
@@ -508,6 +718,20 @@ def build_gaussian_loglike_jax(
             # Ray shoot image positions to source plane
             ra = kw["kwargs_point_source"][0]["ra"]
             dec = kw["kwargs_point_source"][0]["dec"]
+            # Apply image position offsets for cosmography (not imaging)
+            if use_image_pos_offset:
+                if "offset_x_image" in params_dict:
+                    offset_x = params_dict["offset_x_image"]
+                    offset_y = params_dict["offset_y_image"]
+                elif "offset_x_image_0" in params_dict:
+                    nps_off = ra.shape[0]
+                    offset_x = jnp.stack([params_dict[f"offset_x_image_{i}"] for i in range(nps_off)])
+                    offset_y = jnp.stack([params_dict[f"offset_y_image_{i}"] for i in range(nps_off)])
+                else:
+                    offset_x = jnp.zeros_like(ra)
+                    offset_y = jnp.zeros_like(dec)
+                ra = ra + offset_x
+                dec = dec + offset_y
             x_src, y_src = mass_model.ray_shooting(ra, dec, kw["kwargs_lens"])
             if use_source_position_rayshoot:
                 # Use sampled source position as reference
@@ -536,7 +760,18 @@ def build_gaussian_loglike_jax(
     if use_multi_device and n_devices > 1:
         # Vectorised over a chunk of the batch on each device
         def _loglike_chunk(chunk_params_dict: dict):
-            # Each leaf has shape (chunk_size,)
+            """Evaluate log-likelihood for a chunk of parameters on one device.
+
+            Parameters
+            ----------
+            chunk_params_dict : dict
+                Parameter dictionary where each leaf has shape (chunk_size,).
+
+            Returns
+            -------
+            jax.Array
+                1-D array of log-likelihood values for the chunk.
+            """
             return jax.vmap(loglike_single_jit)(chunk_params_dict)
 
         loglike_chunk_pmap = jax.pmap(_loglike_chunk)
@@ -545,7 +780,19 @@ def build_gaussian_loglike_jax(
 
     # ----- 3. Helpers for batched inputs from NAUTILUS -----
     def _prepare_batched_params(sample_dict: dict):
-        """Convert NAUTILUS dict-of-numpy -> dict-of-JAX with leading batch axis."""
+        """Convert Nautilus parameter dict from NumPy to JAX with batch axis.
+
+        Parameters
+        ----------
+        sample_dict : dict
+            Parameter dictionary from Nautilus (NumPy arrays or scalars).
+
+        Returns
+        -------
+        tuple of (int or None, dict)
+            Batch size B (None if scalar) and JAX parameter dictionary
+            with all leaves having shape (B,).
+        """
         jax_params = {k: jnp.asarray(v) for k, v in sample_dict.items()}
 
         # Detect batch size B
@@ -560,6 +807,18 @@ def build_gaussian_loglike_jax(
             return None, jax_params
 
         def to_batched(x):
+            """Broadcast a scalar or 1-D array to batch shape (B,).
+
+            Parameters
+            ----------
+            x : array-like
+                Scalar or 1-D array to broadcast.
+
+            Returns
+            -------
+            jax.Array
+                Array with shape (B,).
+            """
             x = jnp.asarray(x)
             if x.ndim == 0:
                 return jnp.broadcast_to(x, (B,))
@@ -577,9 +836,21 @@ def build_gaussian_loglike_jax(
 
     # ----- 4. NAUTILUS-facing wrapper -----
     def loglike(sample_dict: dict):
-        """
-        Accepts scalar or batched dicts (numpy / Python scalars),
-        returns float or 1D numpy array of log-likelihoods.
+        """Evaluate JAX-accelerated log-likelihood for scalar or batched inputs.
+
+        Accepts scalar or batched parameter dictionaries (NumPy arrays or
+        Python scalars). Uses vmap for single-device batching and pmap for
+        multi-device parallelism when available.
+
+        Parameters
+        ----------
+        sample_dict : dict
+            Parameter dictionary with scalar or array values.
+
+        Returns
+        -------
+        float or ndarray
+            Scalar log-likelihood or 1-D NumPy array of log-likelihoods.
         """
         B, batched_params = _prepare_batched_params(sample_dict)
 
@@ -597,6 +868,18 @@ def build_gaussian_loglike_jax(
             pad = B_pad - B
 
             def pad_leaf(x):
+                """Pad array to B_pad length by repeating the last element.
+
+                Parameters
+                ----------
+                x : jax.Array
+                    1-D array to pad.
+
+                Returns
+                -------
+                jax.Array
+                    Padded array of length B_pad.
+                """
                 if pad == 0:
                     return x
                 # Repeat last element to pad; this only affects discarded tail
@@ -605,7 +888,18 @@ def build_gaussian_loglike_jax(
             padded = {k: pad_leaf(v) for k, v in batched_params.items()}
 
             def reshape_leaf(x):
-                # (n_devices, B_per)
+                """Reshape array for pmap sharding across devices.
+
+                Parameters
+                ----------
+                x : jax.Array
+                    1-D padded array of length B_pad.
+
+                Returns
+                -------
+                jax.Array
+                    Array with shape (n_devices, B_per).
+                """
                 return x.reshape((n_devices, B_per))
 
             sharded = {k: reshape_leaf(v) for k, v in padded.items()}

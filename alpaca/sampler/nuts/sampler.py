@@ -2,6 +2,8 @@
 
 Contains the core NUTS sampling logic using NumPyro, including multi-chain
 parallel execution, diagnostics, and sample persistence.
+
+author: hkrizic
 """
 
 import json
@@ -20,10 +22,13 @@ def _print_filtered_mcmc_summary(mcmc, exclude_patterns=None):
     This is useful for Correlated Fields models where source_pixels_field_xi
     has hundreds of parameters that make the output unreadable.
 
-    Args:
-        mcmc: NumPyro MCMC object with samples.
-        exclude_patterns: List of string patterns to exclude from summary.
-            Parameters containing any of these patterns will be skipped.
+    Parameters
+    ----------
+    mcmc : numpyro.infer.MCMC
+        NumPyro MCMC object with samples.
+    exclude_patterns : list of str or None
+        String patterns to exclude from summary. Parameters containing
+        any of these patterns will be skipped.
     """
     import numpyro.diagnostics as diagnostics
 
@@ -110,10 +115,13 @@ def _numpyro_model(logdensity_fn, init_params_structure):
     Samples unconstrained parameters from ImproperUniform priors and
     applies the log-density as a potential factor.
 
-    Args:
-        logdensity_fn: Log-density function mapping parameter dict to scalar.
-        init_params_structure: Dict of initial parameter values (single chain)
-            used to infer parameter names and shapes.
+    Parameters
+    ----------
+    logdensity_fn : callable
+        Log-density function mapping parameter dict to scalar.
+    init_params_structure : dict
+        Initial parameter values (single chain) used to infer parameter
+        names and shapes.
     """
     import numpyro
     import numpyro.distributions as dist
@@ -148,14 +156,21 @@ def _numpyro_model(logdensity_fn, init_params_structure):
 def _compute_log_densities_batched(compute_fn, samples, n_total, batch_size):
     """Compute log-densities in batches of a given size.
 
-    Args:
-        compute_fn: Vmapped + jitted log-density function.
-        samples: Dict of raw sample arrays (total samples along axis 0).
-        n_total: Total number of samples.
-        batch_size: Number of samples per batch.
+    Parameters
+    ----------
+    compute_fn : callable
+        Vmapped + jitted log-density function.
+    samples : dict
+        Raw sample arrays (total samples along axis 0).
+    n_total : int
+        Total number of samples.
+    batch_size : int
+        Number of samples per batch.
 
-    Returns:
-        1-D numpy array of log-density values.
+    Returns
+    -------
+    ndarray
+        1-D array of log-density values.
     """
     log_density_batches = []
     for i in range(0, n_total, batch_size):
@@ -188,29 +203,45 @@ def run_nuts_numpyro(
     Gelman 2014) via NumPyro. Chains run in parallel using jax.pmap() when
     multiple devices are available.
 
-    Args:
-        logdensity_fn: Log-density function mapping parameter dict to scalar.
-            Must be JAX-compatible (jit, grad).
-        initial_positions: Initial parameter values with shape (num_chains,)
-            or (num_chains, param_dim) per leaf.
-        num_warmup: Warmup iterations for step size and mass matrix adaptation.
-        num_samples: Posterior samples per chain after warmup.
-        num_chains: Number of parallel chains (default: all available devices).
-        seed: Random seed for reproducibility.
-        outdir: Output directory for sample persistence.
-        verbose: Print progress and diagnostics.
-        target_accept_prob: Target Metropolis acceptance rate (default 0.8).
-        max_tree_depth: Maximum tree depth for NUTS (default 10).
-        chain_method: "parallel" (pmap), "vectorized" (vmap), or "sequential".
-        progress_bar: Show progress bar during sampling.
+    Parameters
+    ----------
+    logdensity_fn : callable
+        Log-density function mapping parameter dict to scalar.
+        Must be JAX-compatible (jit, grad).
+    initial_positions : dict
+        Initial parameter values with shape (num_chains,) or
+        (num_chains, param_dim) per leaf.
+    num_warmup : int
+        Warmup iterations for step size and mass matrix adaptation.
+    num_samples : int
+        Posterior samples per chain after warmup.
+    num_chains : int or None
+        Number of parallel chains (default: all available devices).
+    seed : int
+        Random seed for reproducibility.
+    outdir : str or None
+        Output directory for sample persistence.
+    verbose : bool
+        Print progress and diagnostics.
+    target_accept_prob : float
+        Target Metropolis acceptance rate.
+    max_tree_depth : int
+        Maximum tree depth for NUTS.
+    chain_method : str
+        "parallel" (pmap), "vectorized" (vmap), or "sequential".
+    progress_bar : bool
+        Show progress bar during sampling.
 
-    Returns:
-        Results dict containing samples, samples_by_chain, log_density,
+    Returns
+    -------
+    dict
+        Results containing samples, samples_by_chain, log_density,
         divergences, acceptance_rate, runtime, and config.
 
-    Note:
-        When chain_method="parallel", chains are distributed across available
-        accelerators using jax.pmap for efficient parallel execution.
+    Notes
+    -----
+    When chain_method="parallel", chains are distributed across available
+    accelerators using jax.pmap for efficient parallel execution.
     """
     import numpyro
     from numpyro.infer import MCMC, NUTS
@@ -448,10 +479,14 @@ def run_nuts_numpyro(
 def load_nuts_samples(outdir: str):
     """Restore NUTS samples from compressed archive.
 
-    Args:
-        outdir: Directory containing nuts_samples.npz.
+    Parameters
+    ----------
+    outdir : str
+        Directory containing nuts_samples.npz.
 
-    Returns:
+    Returns
+    -------
+    dict
         Reconstructed samples dictionary with log-density and diagnostics.
     """
     path = os.path.join(outdir, "nuts_samples.npz")

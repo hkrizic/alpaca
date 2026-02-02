@@ -2,6 +2,8 @@
 
 Provides functions to run importance nested sampling, manage timing
 diagnostics, and restore posteriors from checkpoint files.
+
+author: hkrizic
 """
 
 import json
@@ -21,12 +23,32 @@ class TimedLoglike:
     """
 
     def __init__(self, loglike):
+        """Initialize the timed likelihood wrapper.
+
+        Parameters
+        ----------
+        loglike : callable
+            Log-likelihood function to wrap. Must accept a parameter
+            dictionary and return a scalar or array.
+        """
         self.loglike = loglike
         self.n_calls = 0
         self.total_time = 0.0
         self.max_time = 0.0
 
     def __call__(self, sample_dict: dict):
+        """Evaluate the wrapped log-likelihood with timing instrumentation.
+
+        Parameters
+        ----------
+        sample_dict : dict
+            Parameter dictionary passed through to the wrapped function.
+
+        Returns
+        -------
+        float or ndarray
+            Log-likelihood value(s) from the wrapped function.
+        """
         t0 = now()
         val = self.loglike(sample_dict)
         dt = now() - t0
@@ -38,7 +60,20 @@ class TimedLoglike:
 
 
 def _save_nautilus_timing_json(timing_dict: dict, filepath: str) -> str:
-    """Persist timing diagnostics to JSON alongside checkpoint."""
+    """Persist timing diagnostics to JSON alongside checkpoint.
+
+    Parameters
+    ----------
+    timing_dict : dict
+        Timing diagnostics to save.
+    filepath : str
+        Checkpoint filepath used to determine output location.
+
+    Returns
+    -------
+    str
+        Path to the saved timing JSON file.
+    """
     base_dir = os.path.dirname(os.path.abspath(filepath))
     log_dir = os.path.join(base_dir, "logs", "benchmark_timing")
     os.makedirs(log_dir, exist_ok=True)
@@ -78,23 +113,34 @@ def run_nautilus(
     accelerated Nautilus algorithm (Lange 2023). Computes posterior samples
     and the Bayesian evidence Z for model comparison.
 
-    Args:
-        prior: Prior distribution over model parameters (nautilus.Prior).
-        loglike: Log-likelihood function.
-        n_live: Number of live points controlling sampling resolution.
-        filepath: HDF5 checkpoint path for persistence and resumption.
-        resume: Continue from existing checkpoint if available.
-        verbose: Print progress messages.
-        run_kwargs: Additional keyword arguments for sampler.run().
-        PARALLELIZE_OPTION: Enable vectorized likelihood evaluation for GPU.
-        NUMBER_OF_POOLS: Worker pool size for parallelization.
-        n_batch: Batch size for vectorized evaluation.
+    Parameters
+    ----------
+    prior : nautilus.Prior
+        Prior distribution over model parameters.
+    loglike : callable
+        Log-likelihood function.
+    n_live : int
+        Number of live points controlling sampling resolution.
+    filepath : str
+        HDF5 checkpoint path for persistence and resumption.
+    resume : bool
+        Continue from existing checkpoint if available.
+    verbose : bool
+        Print progress messages.
+    run_kwargs : dict or None
+        Additional keyword arguments for sampler.run().
+    PARALLELIZE_OPTION : bool
+        Enable vectorized likelihood evaluation for GPU.
+    NUMBER_OF_POOLS : int or None
+        Worker pool size for parallelization.
+    n_batch : int or None
+        Batch size for vectorized evaluation.
 
-    Returns:
-        Tuple of (sampler, points, log_w, log_l) where sampler is the
-        nautilus.Sampler instance, points is a structured array of posterior
-        samples, log_w is the array of log importance weights, and log_l
-        is the array of log-likelihood values.
+    Returns
+    -------
+    tuple of (Sampler, ndarray, ndarray, ndarray)
+        Sampler instance, structured array of posterior samples,
+        log importance weights, and log-likelihood values.
     """
     # HDF5 locking handling
     os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
@@ -232,14 +278,21 @@ def load_posterior_from_checkpoint(
 ):
     """Restore Nautilus posterior from checkpoint without additional sampling.
 
-    Args:
-        prior: Prior distribution (must match checkpoint).
-        loglike: Log-likelihood function (required for Sampler initialization).
-        n_live: Number of live points (must match checkpoint).
-        filepath: Path to HDF5 checkpoint file.
+    Parameters
+    ----------
+    prior : nautilus.Prior
+        Prior distribution (must match checkpoint).
+    loglike : callable
+        Log-likelihood function (required for Sampler initialization).
+    n_live : int
+        Number of live points (must match checkpoint).
+    filepath : str
+        Path to HDF5 checkpoint file.
 
-    Returns:
-        Tuple of (sampler, points, log_w, log_l).
+    Returns
+    -------
+    tuple of (Sampler, ndarray, ndarray, ndarray)
+        Sampler instance, posterior samples, log weights, and log-likelihoods.
     """
     os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 

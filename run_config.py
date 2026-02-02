@@ -7,6 +7,8 @@ Edit the settings below, then call ``load_config()`` to get a ready-to-use
 ``PipelineConfig`` object.
 
 For TDLMC-specific configuration, see ``run_config_TDC.py`` instead.
+
+author: hkrizic
 """
 
 import datetime
@@ -27,30 +29,30 @@ from alpaca.config import (
 # =============================================================================
 # OUTPUT DIRECTORY
 # =============================================================================
-OUTPUT_DIR = "./results/run_{date}/"  # {date} is replaced at runtime
+OUTPUT_DIR = "./results/cfsupersamplingconv_run_{date}/"  # {date} is replaced at runtime
 
 # =============================================================================
 # SOURCE LIGHT MODEL  (choose ONE)
 # =============================================================================
 # Option 1: Shapelets (analytic basis functions)
-USE_SHAPELETS = True
-SHAPELETS_N_MAX = 6
+USE_SHAPELETS = False
+SHAPELETS_N_MAX = 8
 
 # Option 2: Correlated Fields (pixelated source with GP prior)
-USE_CORR_FIELDS = False  # set True to use instead of Shapelets
+USE_CORR_FIELDS = True  # set True to use instead of Shapelets
 
 # =============================================================================
 # CORRELATED FIELD HYPERPARAMETERS  (only used if USE_CORR_FIELDS = True)
 # =============================================================================
 CORR_FIELD_NUM_PIXELS = 80
-CORR_FIELD_LOGLOGAVGSLOPE = (-6.0, 0.5)   # smoothness prior (smaller = smoother)
-CORR_FIELD_FLUCTUATIONS = (1.0, 0.5)       # fluctuation amplitude prior
+CORR_FIELD_LOGLOGAVGSLOPE = (-4.0, 1.5)   # smoothness prior (smaller = smoother)
+CORR_FIELD_FLUCTUATIONS = (1.5, 1.0)       # fluctuation amplitude prior
 CORR_FIELD_MEAN_INTENSITY = None            # None = auto-estimate from data
-CORR_FIELD_BORDER_SIZE = 20                 # border cropping for FFT
+CORR_FIELD_BORDER_SIZE = 25                 # border cropping for FFT
 
 # Arc mask (defines where source light can appear)
 CORR_FIELD_ARC_MASK_INNER = 0.3   # inner radius in arcsec (mask lens center)
-CORR_FIELD_ARC_MASK_OUTER = 2.5   # outer radius in arcsec
+CORR_FIELD_ARC_MASK_OUTER = 3.5   # outer radius in arcsec
 CORR_FIELD_CUSTOM_MASK_PATH = None # e.g. "./my_custom_mask.npy"
 
 # =============================================================================
@@ -61,9 +63,9 @@ SAMPLER = "nuts"   # "nuts", "nautilus", or "default"
 # =============================================================================
 # PIPELINE PHASE TOGGLES
 # =============================================================================
-RUN_PSF_RECONSTRUCTION = False
+RUN_PSF_RECONSTRUCTION = True
 RUN_MULTISTART = True
-RUN_SAMPLING = True
+RUN_SAMPLING = False
 
 # =============================================================================
 # LIKELIHOOD SETTINGS
@@ -78,6 +80,10 @@ USE_RAYSHOOT_SYSTEMATIC_ERROR = True
 RAYSHOOT_SYS_ERROR_MIN = 0.00005  # arcsec (0.05 mas)
 RAYSHOOT_SYS_ERROR_MAX = 0.005    # arcsec (5 mas)
 
+# Image position offset for TD/rayshoot terms (accounts for astrometric errors)
+USE_IMAGE_POS_OFFSET = True
+IMAGE_POS_OFFSET_SIGMA = 0.08    # arcsec, prior sigma for offsets
+
 # =============================================================================
 # GRADIENT DESCENT / MULTI-START
 # =============================================================================
@@ -90,9 +96,9 @@ CHI2_RED_THRESHOLD = 2.0
 # =============================================================================
 # PSF RECONSTRUCTION
 # =============================================================================
-N_PSF_ITERATIONS = 4
-PSF_MULTISTART_STARTS = 20
-PSF_ROTATION_MODE = "90"             # "none", "180", or "90"
+N_PSF_ITERATIONS = 3
+PSF_MULTISTART_STARTS = 50
+PSF_ROTATION_MODE = "none"             # "none", "180", or "90"
 PSF_NEGATIVE_SIGMA_THRESHOLD = 2.0   # mask pixels with residual < -N*sigma
 
 # =============================================================================
@@ -121,13 +127,25 @@ PS_MIN_SEP = 0.08          # minimum separation between images (arcsec)
 # =============================================================================
 
 def load_config(use_time_delays: bool = True) -> PipelineConfig:
-    """Build a ``PipelineConfig`` from the settings defined above.
+    """
+    Build a ``PipelineConfig`` from the settings defined above.
+
+    Reads all module-level constants (source model, sampler, likelihood,
+    gradient descent, PSF, and prior settings) and assembles them into a
+    single ``PipelineConfig`` dataclass.  The output directory is
+    timestamped with the current date and time.
 
     Parameters
     ----------
     use_time_delays : bool
         Whether the pipeline should include time delays in the likelihood.
         Typically derived from whether time-delay data is provided.
+
+    Returns
+    -------
+    PipelineConfig
+        Fully populated pipeline configuration object ready for
+        ``run_pipeline()``.
     """
     use_shapelets = USE_SHAPELETS
     use_corr_fields = USE_CORR_FIELDS
@@ -174,6 +192,8 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
         use_rayshoot_systematic_error=USE_RAYSHOOT_SYSTEMATIC_ERROR,
         rayshoot_sys_error_min=RAYSHOOT_SYS_ERROR_MIN,
         rayshoot_sys_error_max=RAYSHOOT_SYS_ERROR_MAX,
+        use_image_pos_offset=USE_IMAGE_POS_OFFSET,
+        image_pos_offset_sigma=IMAGE_POS_OFFSET_SIGMA,
 
         # Phase toggles
         run_psf_reconstruction=RUN_PSF_RECONSTRUCTION,
@@ -206,6 +226,7 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
             use_rayshoot_systematic_error=USE_RAYSHOOT_SYSTEMATIC_ERROR,
             rayshoot_sys_error_min=RAYSHOOT_SYS_ERROR_MIN,
             rayshoot_sys_error_max=RAYSHOOT_SYS_ERROR_MAX,
+            use_image_pos_offset=USE_IMAGE_POS_OFFSET,
             max_retry_iterations=MAX_RETRY_ITERATIONS,
             chi2_red_threshold=CHI2_RED_THRESHOLD,
         ),
@@ -219,6 +240,8 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
             use_rayshoot_systematic_error=USE_RAYSHOOT_SYSTEMATIC_ERROR,
             rayshoot_sys_error_min=RAYSHOOT_SYS_ERROR_MIN,
             rayshoot_sys_error_max=RAYSHOOT_SYS_ERROR_MAX,
+            use_image_pos_offset=USE_IMAGE_POS_OFFSET,
+            image_pos_offset_sigma=IMAGE_POS_OFFSET_SIGMA,
             nuts_num_warmup=NUTS_NUM_WARMUP,
             nuts_num_samples=NUTS_NUM_SAMPLES,
             nuts_num_chains=None,
@@ -265,6 +288,8 @@ def load_config(use_time_delays: bool = True) -> PipelineConfig:
     if USE_RAYSHOOT_SYSTEMATIC_ERROR:
         print(f"  Ray shooting systematic error: free parameter "
               f"[{RAYSHOOT_SYS_ERROR_MIN}, {RAYSHOOT_SYS_ERROR_MAX}] arcsec")
+    if USE_IMAGE_POS_OFFSET:
+        print(f"  Image position offset: enabled (sigma={IMAGE_POS_OFFSET_SIGMA} arcsec)")
     if MAX_RETRY_ITERATIONS > 1:
         print(f"  Gradient descent retry: up to {MAX_RETRY_ITERATIONS} "
               f"iterations if chi2_red > {CHI2_RED_THRESHOLD:.2f}")
@@ -284,21 +309,26 @@ def load_data(
     psf_path: str,
     noise_map_path: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load image, PSF, and noise map from FITS or .npy files.
+    """
+    Load image, PSF, and noise map from FITS or .npy files.
+
+    Each path is dispatched to ``_load_array`` which supports ``.fits``
+    and ``.npy`` formats.
 
     Parameters
     ----------
     image_path : str
-        Path to the 2-D lens image.
+        Path to the 2-D lens image (``.fits`` or ``.npy``).
     psf_path : str
-        Path to the 2-D PSF kernel.
+        Path to the 2-D PSF kernel (``.fits`` or ``.npy``).
     noise_map_path : str
-        Path to the 2-D noise map.
+        Path to the 2-D noise map (``.fits`` or ``.npy``).
 
     Returns
     -------
-    img, psf_kernel, noise_map : np.ndarray
-        The loaded arrays.
+    tuple of (np.ndarray, np.ndarray, np.ndarray)
+        ``(img, psf_kernel, noise_map)`` -- the loaded 2-D arrays cast
+        to ``float``.
     """
     img = _load_array(image_path)
     psf_kernel = _load_array(psf_path)
@@ -315,16 +345,21 @@ def parse_positions_and_delays(
     np.ndarray | None,
     list[str],
 ]:
-    """Convert user-facing dicts into arrays expected by ``run_pipeline``.
+    """
+    Convert user-facing dicts into arrays expected by ``run_pipeline``.
+
+    Extracts ordered ``(x, y)`` arrays from *image_positions* and, when
+    time delays are provided, builds the corresponding delay and error
+    arrays relative to the first (reference) image.
 
     Parameters
     ----------
-    image_positions : dict
+    image_positions : dict[str, tuple[float, float]]
         Mapping of image labels to approximate ``(x, y)`` positions in arcsec.
         These are used to label the auto-detected images so that time delays
         are matched to the correct pairs.  The first entry is the reference
         image for time delays.
-    time_delays : dict or None
+    time_delays : dict[str, tuple[float, float]] or None
         Mapping of non-reference image labels to ``(delay, error)`` in days.
         Set to *None* to run without time-delay likelihood.
 
@@ -338,6 +373,12 @@ def parse_positions_and_delays(
         1-sigma errors on the delays.
     labels : list of str
         Ordered image labels (e.g. ``["A", "B", "C", "D"]``).
+
+    Raises
+    ------
+    ValueError
+        If a non-reference label in *image_positions* is missing from
+        *time_delays*.
     """
     labels = list(image_positions.keys())
     xs = np.array([image_positions[lab][0] for lab in labels])
@@ -370,7 +411,25 @@ def parse_positions_and_delays(
 
 
 def _load_array(path: str) -> np.ndarray:
-    """Load a 2-D array from a FITS or .npy file."""
+    """
+    Load a 2-D array from a FITS or .npy file.
+
+    Parameters
+    ----------
+    path : str
+        Filesystem path to the data file.  Supported extensions are
+        ``.fits`` / ``.fit`` and ``.npy``.
+
+    Returns
+    -------
+    np.ndarray
+        The loaded 2-D array cast to ``float``.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not ``.fits``, ``.fit``, or ``.npy``.
+    """
     ext = os.path.splitext(path)[1].lower()
     if ext in (".fits", ".fit"):
         return np.asarray(fits.getdata(path), dtype=float)

@@ -1,4 +1,8 @@
-"""Alpaca data loading and setup utilities."""
+"""
+Alpaca data loading and setup utilities.
+
+author: hkrizic
+"""
 from alpaca.data.detection import detect_ps_images_centered, make_plotter
 from alpaca.data.grids import make_pixel_grids
 from alpaca.data.masks import (

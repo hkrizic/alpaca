@@ -2,6 +2,8 @@
 
 Converts weighted nested sampling results into standardized posterior
 containers with optional importance resampling.
+
+author: hkrizic
 """
 
 import numpy as np
@@ -24,16 +26,26 @@ def get_nautilus_posterior(
     format, with optional importance resampling to generate equally-weighted
     samples suitable for corner plots and summary statistics.
 
-    Args:
-        sampler: Sampler instance (for evidence extraction).
-        points: Raw posterior samples from sampler.posterior().
-        log_w: Log importance weights.
-        log_l: Log-likelihood values.
-        n_samples: Number of samples after resampling. If None, returns weighted.
-        random_seed: Seed for reproducible resampling.
-        use_weights: Use importance weights for resampling.
+    Parameters
+    ----------
+    sampler : nautilus.Sampler
+        Sampler instance (for evidence extraction).
+    points : ndarray
+        Raw posterior samples from sampler.posterior().
+    log_w : ndarray
+        Log importance weights.
+    log_l : ndarray
+        Log-likelihood values.
+    n_samples : int or None
+        Number of samples after resampling. If None, returns weighted.
+    random_seed : int or None
+        Seed for reproducible resampling.
+    use_weights : bool
+        Use importance weights for resampling.
 
-    Returns:
+    Returns
+    -------
+    dict
         Standardized posterior container dictionary.
     """
     samples, param_names = _nautilus_points_to_array(points)

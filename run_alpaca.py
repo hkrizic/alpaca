@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from alpaca.pipeline import run_pipeline
-from alpaca.sampler.gradient_descent import compute_bic_from_results
+from alpaca.utils.bic import compute_bic_from_results
 from run_config import load_config, load_data, parse_positions_and_delays
 
 # =============================================================================
@@ -66,6 +66,20 @@ TIME_DELAYS = {
 # =============================================================================
 
 def main():
+    """
+    Run the complete ALPACA lens modeling pipeline on generic data.
+
+    Loads data from paths defined at the top of this script, builds
+    a ``PipelineConfig`` via ``run_config.load_config``, executes the
+    three pipeline phases (PSF reconstruction, gradient descent, posterior
+    sampling), and prints a summary of the results including parameter
+    estimates, marginalized posterior plots, and BIC.
+
+    Returns
+    -------
+    None
+        All outputs are saved to disk and printed to stdout.
+    """
     print("=" * 50)
     print("=" * 50)
     print("ALPACA Lens Modeling Pipeline")

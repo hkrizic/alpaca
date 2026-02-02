@@ -23,7 +23,7 @@ class TestImports:
         assert callable(load_multistart_summary)
 
     def test_import_bic_functions(self):
-        from alpaca.sampler.gradient_descent import compute_bic, compute_bic_from_results
+        from alpaca.utils.bic import compute_bic, compute_bic_from_results
         assert callable(compute_bic)
         assert callable(compute_bic_from_results)
 
@@ -33,7 +33,7 @@ class TestComputeBic:
 
     def test_compute_bic_basic(self):
         import numpy as np
-        from alpaca.sampler.gradient_descent.bic import compute_bic
+        from alpaca.utils.bic import compute_bic
 
         # compute_bic expects a posterior dict with 'log_likelihood' and 'param_names'
         posterior = {

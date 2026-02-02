@@ -2,6 +2,8 @@
 
 Builds multivariate prior distributions centered on MAP estimates
 for strong gravitational lens model parameters.
+
+author: hkrizic
 """
 
 
@@ -10,14 +12,13 @@ from nautilus import Prior
 from scipy.stats import lognorm, loguniform, norm
 from scipy.stats import uniform as uniform_dist
 
-from alpaca.sampler.constants import D_DT_MAX, D_DT_MIN
-from alpaca.sampler.likelihood import (
+from alpaca.sampler.nautilus.likelihood import (
     build_gaussian_loglike,
     build_gaussian_loglike_jax,
     make_paramdict_to_kwargs,
     make_paramdict_to_kwargs_jax,
 )
-from alpaca.sampler.priors import _bounded_prior, tnorm
+from alpaca.sampler.nautilus.prior_utils import _bounded_prior, tnorm
 
 
 def build_nautilus_prior(
@@ -31,6 +32,8 @@ def build_nautilus_prior(
     use_rayshoot_systematic_error: bool = False,
     rayshoot_sys_error_min: float = 0.00005,
     rayshoot_sys_error_max: float = 0.005,
+    use_image_pos_offset: bool = False,
+    image_pos_offset_sigma: float = 0.01,
 ) -> tuple[Prior, dict, int]:
     """Construct a Nautilus prior centered on MAP estimate.
 
@@ -44,26 +47,42 @@ def build_nautilus_prior(
     - Truncated normal for bounded physical parameters
     - Log-normal for strictly positive amplitudes
 
-    Args:
-        best_params: MAP parameter estimates from optimization.
-        use_uniform_for_bounded: Replace truncated normals with uniform distributions.
-        uniform_widen_factor: Expansion factor for uniform prior bounds.
-        lens_gamma_prior_type: Prior type for lens_gamma ("uniform" or "normal").
-        lens_gamma_prior_low: Lower bound for lens_gamma prior.
-        lens_gamma_prior_high: Upper bound for lens_gamma prior.
-        lens_gamma_prior_sigma: Standard deviation for normal prior.
-        use_rayshoot_systematic_error: Include systematic error parameter.
-        rayshoot_sys_error_min: Minimum systematic error value.
-        rayshoot_sys_error_max: Maximum systematic error value.
+    Parameters
+    ----------
+    best_params : dict
+        MAP parameter estimates from optimization.
+    use_uniform_for_bounded : bool
+        Replace truncated normals with uniform distributions.
+    uniform_widen_factor : float
+        Expansion factor for uniform prior bounds.
+    lens_gamma_prior_type : str
+        Prior type for lens_gamma ("uniform" or "normal").
+    lens_gamma_prior_low : float
+        Lower bound for lens_gamma prior.
+    lens_gamma_prior_high : float
+        Upper bound for lens_gamma prior.
+    lens_gamma_prior_sigma : float
+        Standard deviation for normal prior.
+    use_rayshoot_systematic_error : bool
+        Include systematic error parameter.
+    rayshoot_sys_error_min : float
+        Minimum systematic error value.
+    rayshoot_sys_error_max : float
+        Maximum systematic error value.
+    use_image_pos_offset : bool
+        Include image position offset parameters.
+    image_pos_offset_sigma : float
+        Prior sigma for image position offsets (arcsec).
 
-    Returns:
-        Tuple of (prior, best_flat, nps) where prior is the nautilus.Prior
-        object, best_flat is the flattened parameter dict, and nps is the
-        number of point source images.
+    Returns
+    -------
+    tuple of (nautilus.Prior, dict, int)
+        Prior object, flattened parameter dict, and number of point
+        source images.
     """
     best_flat = dict(best_params)
     if "D_dt" not in best_flat:
-        best_flat["D_dt"] = 0.5 * (D_DT_MIN + D_DT_MAX)
+        best_flat["D_dt"] = 0.5 * (500.0 + 10000.0)  # Default if missing
 
     x_im = np.atleast_1d(best_params.get("x_image", []))
     y_im = np.atleast_1d(best_params.get("y_image", []))
@@ -148,7 +167,7 @@ def build_nautilus_prior(
     )
     prior.add_parameter(
         "D_dt",
-        dist=uniform_dist(loc=D_DT_MIN, scale=D_DT_MAX - D_DT_MIN),
+        dist=uniform_dist(loc=500, scale=10000 - 500),
     )
 
     # --- Lens light ---
@@ -268,6 +287,22 @@ def build_nautilus_prior(
             dist=lognorm(s=0.6, scale=np.exp(mu_A)),
         )
 
+    # --- Image position offsets (optional) ---
+    # These offsets are ONLY used for TD/rayshoot likelihood, not imaging
+    if use_image_pos_offset:
+        for i in range(nps):
+            prior.add_parameter(
+                f"offset_x_image_{i}",
+                dist=norm(loc=0.0, scale=image_pos_offset_sigma),
+            )
+            prior.add_parameter(
+                f"offset_y_image_{i}",
+                dist=norm(loc=0.0, scale=image_pos_offset_sigma),
+            )
+            # Initialize best_flat with zero offsets
+            best_flat[f"offset_x_image_{i}"] = best_params.get(f"offset_x_image_{i}", 0.0)
+            best_flat[f"offset_y_image_{i}"] = best_params.get(f"offset_y_image_{i}", 0.0)
+
     # --- Ray shooting systematic error (optional) ---
     if use_rayshoot_systematic_error:
         prior.add_parameter(
@@ -304,6 +339,8 @@ def build_nautilus_prior_and_loglike(
     lens_gamma_prior_high: float = 2.8,
     lens_gamma_prior_sigma: float = 0.25,
     use_corr_fields: bool = False,
+    use_image_pos_offset: bool = False,
+    image_pos_offset_sigma: float = 0.01,
 ):
     """Configure complete Nautilus inference setup.
 
@@ -311,30 +348,57 @@ def build_nautilus_prior_and_loglike(
     nested sampling. Optionally enables JAX acceleration for the
     forward model evaluation.
 
-    Args:
-        best_params: MAP parameter estimates for prior centering.
-        lens_image: Herculens forward model.
-        img: Observed image data.
-        noise_map: Per-pixel noise standard deviation.
-        use_uniform_for_bounded: Use uniform instead of truncated normal priors.
-        use_jax: Enable XLA-compiled likelihood evaluation.
-        use_multi_device: Enable multi-GPU parallelism (requires use_jax=True).
-        measured_delays: Time-delay measurements relative to image 0.
-        delay_errors: 1-sigma uncertainties for time delays.
-        use_rayshoot_consistency: Add ray shooting consistency term.
-        rayshoot_consistency_sigma: Standard deviation (arcsec) for rayshoot term.
-        use_source_position_rayshoot: Compare to sampled source position.
-        use_rayshoot_systematic_error: Include systematic error parameter.
-        rayshoot_sys_error_min: Minimum systematic error value.
-        rayshoot_sys_error_max: Maximum systematic error value.
-        lens_gamma_prior_type: Prior type for lens_gamma ("uniform" or "normal").
-        lens_gamma_prior_low: Lower bound for lens_gamma prior.
-        lens_gamma_prior_high: Upper bound for lens_gamma prior.
-        lens_gamma_prior_sigma: Standard deviation for normal prior.
-        use_corr_fields: Model uses Correlated Fields.
+    Parameters
+    ----------
+    best_params : dict
+        MAP parameter estimates for prior centering.
+    lens_image : herculens LensImage
+        Herculens forward model.
+    img : ndarray
+        Observed image data.
+    noise_map : ndarray
+        Per-pixel noise standard deviation.
+    use_uniform_for_bounded : bool
+        Use uniform instead of truncated normal priors.
+    use_jax : bool
+        Enable XLA-compiled likelihood evaluation.
+    use_multi_device : bool
+        Enable multi-GPU parallelism (requires use_jax=True).
+    measured_delays : array-like or None
+        Time-delay measurements relative to image 0.
+    delay_errors : array-like or None
+        1-sigma uncertainties for time delays.
+    use_rayshoot_consistency : bool
+        Add ray shooting consistency term.
+    rayshoot_consistency_sigma : float
+        Standard deviation (arcsec) for rayshoot term.
+    use_source_position_rayshoot : bool
+        Compare to sampled source position.
+    use_rayshoot_systematic_error : bool
+        Include systematic error parameter.
+    rayshoot_sys_error_min : float
+        Minimum systematic error value.
+    rayshoot_sys_error_max : float
+        Maximum systematic error value.
+    lens_gamma_prior_type : str
+        Prior type for lens_gamma ("uniform" or "normal").
+    lens_gamma_prior_low : float
+        Lower bound for lens_gamma prior.
+    lens_gamma_prior_high : float
+        Upper bound for lens_gamma prior.
+    lens_gamma_prior_sigma : float
+        Standard deviation for normal prior.
+    use_corr_fields : bool
+        Model uses Correlated Fields.
+    use_image_pos_offset : bool
+        Include image position offset parameters.
+    image_pos_offset_sigma : float
+        Prior sigma for image position offsets (arcsec).
 
-    Returns:
-        Tuple of (prior, paramdict_to_kwargs, loglike).
+    Returns
+    -------
+    tuple of (nautilus.Prior, callable, callable)
+        Prior object, parameter transformer, and log-likelihood function.
     """
     prior, best_flat, nps = build_nautilus_prior(
         best_params,
@@ -346,6 +410,8 @@ def build_nautilus_prior_and_loglike(
         use_rayshoot_systematic_error=use_rayshoot_systematic_error,
         rayshoot_sys_error_min=rayshoot_sys_error_min,
         rayshoot_sys_error_max=rayshoot_sys_error_max,
+        use_image_pos_offset=use_image_pos_offset,
+        image_pos_offset_sigma=image_pos_offset_sigma,
     )
 
     if use_jax:
@@ -363,6 +429,7 @@ def build_nautilus_prior_and_loglike(
             use_source_position_rayshoot=use_source_position_rayshoot,
             use_rayshoot_systematic_error=use_rayshoot_systematic_error,
             use_corr_fields=use_corr_fields,
+            use_image_pos_offset=use_image_pos_offset,
         )
     else:
         paramdict_to_kwargs = make_paramdict_to_kwargs(best_flat, nps)
@@ -378,6 +445,7 @@ def build_nautilus_prior_and_loglike(
             use_source_position_rayshoot=use_source_position_rayshoot,
             use_rayshoot_systematic_error=use_rayshoot_systematic_error,
             use_corr_fields=use_corr_fields,
+            use_image_pos_offset=use_image_pos_offset,
         )
 
     return prior, paramdict_to_kwargs, loglike

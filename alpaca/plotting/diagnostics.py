@@ -1,15 +1,21 @@
 """
 Diagnostic plots for lens modeling optimization and sampling.
 
+author: hkrizic
+
 Contains functions for multi-start optimization history, PSF comparison,
 chain diagnostics, and NUTS sampling diagnostics.
 
-Functions:
-    - plot_multistart_history: Track convergence across optimization runs.
-    - plot_multistart_summary: Multi-start chi^2 and loss distribution.
-    - plot_chain_diagnostics: MCMC chain trace and histogram plots.
-    - plot_psf_comparison: PSF initial vs final comparison.
-    - plot_nuts_diagnostics: Comprehensive NUTS sampling diagnostics.
+Functions
+---------
+plot_multistart_summary
+    Multi-start chi^2 and loss distribution.
+plot_chain_diagnostics
+    MCMC chain trace and histogram plots.
+plot_psf_comparison
+    PSF initial vs final comparison.
+plot_nuts_diagnostics
+    Comprehensive NUTS sampling diagnostics.
 """
 
 import os
@@ -29,39 +35,104 @@ def plot_multistart_summary(
     save_path: str,
     dpi: int = 300,
 ) -> None:
-    """Plot multi-start optimization summary."""
+    """
+    Plot multi-start optimization summary.
+
+    Shows reduced chi-squared per run and loss distribution, with Phase 1
+    (initial exploration) and Phase 2 (refinement) visually separated.
+
+    Parameters
+    ----------
+    summary : dict
+        Dictionary containing multi-start optimization results. Expected keys:
+        - ``chi2_reds``: Reduced chi-squared values per run.
+        - ``all_losses``: Loss values per run.
+        - ``best_run``: Index of the best optimization run.
+        - ``n_starts_initial``: Number of Phase 1 (initial) starts.
+    save_path : str
+        File path to save the generated figure.
+    dpi : int, optional
+        Resolution for the saved figure, by default 300.
+
+    Returns
+    -------
+    None
+        The plot is saved to disk at ``save_path``.
+    """
     chi2_reds = np.array(summary.get("chi2_reds", []))
-    losses = np.array(summary.get("all_losses", summary.get("final_losses", [])))
+    losses = np.array(summary.get("all_losses", []))
     best_run = summary.get("best_run", 0)
+    n_initial = summary.get("n_starts_initial", len(chi2_reds))
 
     if len(chi2_reds) == 0 and len(losses) == 0:
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    has_two_phases = n_initial < len(chi2_reds)
 
     # Chi^2 distribution
     if len(chi2_reds) > 0:
         runs = np.arange(len(chi2_reds))
-        colors = ["green" if i == best_run else "steelblue" for i in runs]
-        axes[0].bar(runs, chi2_reds, color=colors, edgecolor="black", alpha=0.7)
+        colors = []
+        for i in runs:
+            if i == best_run:
+                colors.append("green")
+            elif i < n_initial:
+                colors.append("steelblue")
+            else:
+                colors.append("coral")
+
+        axes[0].bar(runs, chi2_reds, color=colors, edgecolor="black",
+                    alpha=0.7, linewidth=0.5)
         axes[0].axhline(chi2_reds[best_run], color="red", linestyle="--",
-                        label=f"Best: {chi2_reds[best_run]:.3f}")
+                        label=f"Best (run {best_run}): {chi2_reds[best_run]:.3f}")
+
+        if has_two_phases:
+            axes[0].axvline(n_initial - 0.5, color="gray", linestyle=":",
+                            alpha=0.7)
+
+        # Build legend with phase indicators
+        from matplotlib.patches import Patch
+        handles = [
+            Patch(facecolor="steelblue", edgecolor="black", alpha=0.7,
+                  label=f"Phase 1 — initial ({n_initial})"),
+        ]
+        if has_two_phases:
+            handles.append(
+                Patch(facecolor="coral", edgecolor="black", alpha=0.7,
+                      label=f"Phase 2 — refinement ({len(chi2_reds) - n_initial})"),
+            )
+        handles.append(
+            Patch(facecolor="green", edgecolor="black", alpha=0.7,
+                  label=f"Best run ({best_run})"),
+        )
+        axes[0].legend(handles=handles, fontsize=8)
+
         axes[0].set_xlabel("Run Index")
         axes[0].set_ylabel("Reduced χ²")
         axes[0].set_title("Multi-start χ² Distribution")
-        axes[0].legend()
 
     # Loss distribution
     if len(losses) > 0:
-        axes[1].hist(losses, bins=min(20, len(losses)), color="steelblue",
-                     edgecolor="black", alpha=0.7)
+        if has_two_phases:
+            axes[1].hist(losses[:n_initial], bins=min(20, n_initial),
+                         color="steelblue", edgecolor="black", alpha=0.6,
+                         label="Phase 1")
+            axes[1].hist(losses[n_initial:], bins=min(20, len(losses) - n_initial),
+                         color="coral", edgecolor="black", alpha=0.6,
+                         label="Phase 2")
+        else:
+            axes[1].hist(losses, bins=min(20, len(losses)),
+                         color="steelblue", edgecolor="black", alpha=0.7)
+
         if best_run < len(losses):
             axes[1].axvline(losses[best_run], color="red", linestyle="--",
                             label=f"Best: {losses[best_run]:.3f}")
         axes[1].set_xlabel("Loss")
         axes[1].set_ylabel("Count")
         axes[1].set_title("Loss Distribution")
-        axes[1].legend()
+        axes[1].legend(fontsize=8)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=dpi, bbox_inches="tight")
@@ -75,7 +146,32 @@ def plot_chain_diagnostics(
     n_params_to_plot: int = 8,
     dpi: int = 300,
 ) -> None:
-    """Plot chain traces for MCMC diagnostics."""
+    """
+    Plot chain traces and histograms for MCMC diagnostics.
+
+    For each parameter, a trace plot (value vs. step) and a marginal histogram
+    are generated side by side. If the chain has a walker dimension, walkers
+    are averaged to produce the trace.
+
+    Parameters
+    ----------
+    chain : np.ndarray
+        MCMC chain samples. Shape ``(n_steps, n_dim)`` or
+        ``(n_steps, n_walkers, n_dim)``.
+    param_names : list of str
+        Names corresponding to each parameter dimension.
+    save_path : str
+        File path to save the generated figure.
+    n_params_to_plot : int, optional
+        Maximum number of parameters to include in the plot, by default 8.
+    dpi : int, optional
+        Resolution for the saved figure, by default 300.
+
+    Returns
+    -------
+    None
+        The plot is saved to disk at ``save_path``.
+    """
     if chain.ndim == 3:
         # (n_steps, n_walkers, n_dim) -> flatten walkers
         n_steps, n_walkers, n_dim = chain.shape
@@ -115,8 +211,33 @@ def plot_psf_comparison(
     dpi: int = 300,
 ) -> None:
     """
-    Plot PSF comparison: initial vs final.
-    UPDATED: Always plots normalized residuals (Residual / sigma) if sigma_map is available.
+    Plot PSF comparison: initial vs final with iteration-by-iteration evolution.
+
+    The top row shows each PSF image on a logarithmic colour scale. The bottom
+    row shows normalized residuals between consecutive iterations and between
+    the final and initial PSFs. If ``sigma_map`` is provided, residuals are
+    divided by the noise map; otherwise raw differences are shown.
+
+    Parameters
+    ----------
+    psf_initial : np.ndarray
+        Initial PSF kernel (2-D array).
+    psf_final : np.ndarray
+        Final reconstructed PSF kernel (2-D array).
+    psf_iterations : list of np.ndarray
+        List of intermediate PSF kernels, one per reconstruction iteration.
+    sigma_map : np.ndarray or None
+        Per-pixel noise standard deviation map used for normalization. If
+        ``None``, raw residuals are plotted instead.
+    save_path : str
+        File path to save the generated figure.
+    dpi : int, optional
+        Resolution for the saved figure, by default 300.
+
+    Returns
+    -------
+    None
+        The plot is saved to disk at ``save_path``.
     """
     n_iter = len(psf_iterations)
 
@@ -150,6 +271,26 @@ def plot_psf_comparison(
 
     # Helper to calculate normalized residual safely
     def get_norm_residual(arr1, arr2, sigma):
+        """
+        Compute the normalized residual between two arrays.
+
+        Parameters
+        ----------
+        arr1 : np.ndarray
+            First array (e.g., current iteration PSF).
+        arr2 : np.ndarray
+            Second array (e.g., previous iteration PSF).
+        sigma : np.ndarray or None
+            Per-pixel noise standard deviation. If ``None``, returns the
+            raw difference.
+
+        Returns
+        -------
+        residual : np.ndarray
+            Normalized (or raw) residual array.
+        is_normalized : bool
+            ``True`` if the residual was divided by sigma.
+        """
         diff = arr1 - arr2
         if sigma is None:
             return diff, False # Fallback to raw subtraction
@@ -215,33 +356,51 @@ def plot_nuts_diagnostics(
     outdir: str = None,
     dpi: int = 150,
 ):
-    """Generate comprehensive diagnostic plots for NUTS sampling results.
+    """
+    Generate comprehensive diagnostic plots for NUTS sampling results.
 
     Creates one figure per chain showing:
-    1. Log-density (negative loss) trace with divergence markers
-    2. Parameter evolution with rolling mean and ±1σ uncertainty bands
 
-    NUTS samples are in unconstrained space. If prob_model is provided,
+    1. Log-density (negative loss) trace with divergence markers.
+    2. Parameter evolution with rolling mean and +/-1 sigma uncertainty bands.
+
+    NUTS samples are in unconstrained space. If ``prob_model`` is provided,
     samples are transformed to constrained (physical) space.
 
-    Args:
-        nuts_results: Output from run_nuts_numpyro containing samples_by_chain,
-            log_density_by_chain, divergences, and config.
-        prob_model: Probabilistic model for unconstrained to constrained transform.
-        param_names: Subset of parameter names to plot. If None, uses highest
-            variance parameters.
-        max_params: Maximum number of parameters to show (default 6).
-        rolling_window: Window size for rolling statistics (default 50).
-        figsize_per_chain: Figure size (width, height) for each chain's plot.
-        outdir: Directory to save figures. If None, figures are displayed.
-        dpi: Resolution for saved figures.
+    Parameters
+    ----------
+    nuts_results : dict
+        Output from ``run_nuts_numpyro`` containing ``samples_by_chain``,
+        ``log_density_by_chain``, ``divergences``, and ``config``.
+    prob_model : ProbModel or ProbModelCorrField, optional
+        Probabilistic model used for unconstrained-to-constrained
+        transformation. If ``None``, samples are plotted in unconstrained
+        space.
+    param_names : list of str, optional
+        Subset of parameter names to plot. If ``None``, the parameters with
+        the highest variance are selected automatically.
+    max_params : int, optional
+        Maximum number of parameters to show, by default 6.
+    rolling_window : int, optional
+        Window size for rolling statistics, by default 50.
+    figsize_per_chain : tuple of float, optional
+        Figure size ``(width, height)`` for each chain's plot,
+        by default ``(14, 10)``.
+    outdir : str, optional
+        Directory to save figures. If ``None``, figures are displayed
+        interactively.
+    dpi : int, optional
+        Resolution for saved figures, by default 150.
 
-    Returns:
-        List of figure objects, one per chain.
+    Returns
+    -------
+    list of matplotlib.figure.Figure
+        One figure per chain containing the diagnostic panels.
 
-    Note:
-        Uncertainty bands show ±1σ computed over a rolling window. Divergent
-        transitions are marked with red vertical lines.
+    Notes
+    -----
+    Uncertainty bands show +/-1 sigma computed over a rolling window.
+    Divergent transitions are marked with red vertical lines.
     """
     # Extract data from results
     samples_by_chain = nuts_results.get("samples_by_chain")
@@ -320,7 +479,23 @@ def plot_nuts_diagnostics(
 
     # Helper function for rolling statistics
     def rolling_stats(x, window):
-        """Compute rolling mean and std."""
+        """
+        Compute rolling mean and standard deviation over a 1-D array.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Input 1-D array of values.
+        window : int
+            Rolling window size.
+
+        Returns
+        -------
+        means : np.ndarray
+            Rolling mean at each position.
+        stds : np.ndarray
+            Rolling standard deviation at each position.
+        """
         n = len(x)
         means = np.zeros(n)
         stds = np.zeros(n)

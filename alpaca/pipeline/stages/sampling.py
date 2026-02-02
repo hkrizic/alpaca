@@ -1,7 +1,18 @@
 """
 alpaca.pipeline.stages.sampling
 
-NUTS and Nautilus sampling stage implementations.
+Pipeline wrappers that set up and run NUTS or Nautilus sampling.
+
+``_run_nuts_sampling()`` delegates log-density construction to
+``alpaca.sampler.nuts.likelihood`` (``build_nuts_logdensity``), which combines
+the Herculens Loss object with time-delay, ray-shooting, and lens_gamma
+prior terms.
+
+``_run_nautilus_sampling()`` delegates to ``alpaca/sampler/nautilus/`` which has
+its own likelihood builder (``nautilus/likelihood.py``) and prior construction
+(``nautilus/prior.py``).
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -11,7 +22,6 @@ import os
 import jax
 import jax.numpy as jnp
 import numpy as np
-from herculens.Inference.loss import Loss
 
 from alpaca.pipeline.io import _save_json
 from alpaca.plotting.diagnostics import plot_nuts_diagnostics
@@ -21,6 +31,7 @@ from alpaca.sampler.nautilus import (
     run_nautilus,
 )
 from alpaca.sampler.nuts import (
+    build_nuts_logdensity,
     get_nuts_posterior,
     run_nuts_numpyro,
 )
@@ -39,128 +50,52 @@ def _run_nuts_sampling(
     measured_delays: np.ndarray | None = None,
     delay_errors: np.ndarray | None = None,
 ) -> dict:
-    """Run NUTS (NumPyro) sampling with parallel chains."""
-    from numpyro.handlers import seed
-    from numpyro.infer.util import constrain_fn, unconstrain_fn
+    """
+    Run NUTS (NumPyro) sampling with parallel or vectorized chains.
 
-    # Wrap model with seed handler to provide PRNG key for tracing
-    # This is needed because NumPyro's log_density requires a PRNG key
-    original_model = prob_model.model
-    prob_model.model = seed(original_model, rng_seed=0)
+    This function builds the log-density from the probabilistic model,
+    constructs initial positions in unconstrained space by perturbing the
+    MAP estimate, runs NumPyro NUTS, generates diagnostic plots, and
+    converts the raw chains to a standardised posterior dictionary which
+    is saved to disk.
 
-    loss_obj = Loss(prob_model)
+    Parameters
+    ----------
+    prob_model : ProbModel or ProbModelCorrField
+        Probabilistic model providing parameter transformations and priors.
+    best_params : dict
+        Best-fit parameter dictionary from multi-start optimisation.
+    lens_image : LensImage
+        Herculens ``LensImage`` used for forward modelling.
+    img : np.ndarray
+        2-D observed lens image.
+    noise_map : np.ndarray
+        2-D noise map (same shape as *img*).
+    config : SamplerConfig
+        Sampler configuration dataclass with NUTS-specific settings
+        (number of warmup steps, samples, chains, target acceptance, etc.).
+    dirs : dict of str
+        Output directory mapping produced by ``_make_output_structure``.
+    verbose : bool
+        If ``True``, print progress information.
+    measured_delays : np.ndarray, optional
+        Measured time delays (relative to the first image).
+    delay_errors : np.ndarray, optional
+        1-sigma errors on *measured_delays*.
 
-    if "D_dt" not in best_params:
-        best_params = dict(best_params)
-        best_params["D_dt"] = 0.5 * (500.0 + 10000.0)
+    Returns
+    -------
+    dict
+        Standardised posterior dictionary with keys ``"samples"``,
+        ``"param_names"``, ``"engine"``, ``"log_likelihood"``, etc.
+    """
+    from numpyro.infer.util import unconstrain_fn
 
-    seeded_model = seed(original_model, rng_seed=0)
-    use_time_delays = measured_delays is not None and delay_errors is not None
-    if use_time_delays:
-        measured_td_j = jnp.asarray(measured_delays)
-        sigma2_td = jnp.asarray(delay_errors) ** 2
-        const_td = jnp.log(2.0 * jnp.pi * sigma2_td)
-        c_km_s = jnp.asarray(299792.458)
-
-        kwargs_ref = prob_model.params2kwargs(best_params)
-        kwargs_point = kwargs_ref.get("kwargs_point_source")
-        if kwargs_point is None:
-            raise ValueError("Time-delay data provided but no point sources found.")
-        nps = int(np.asarray(kwargs_point[0]["ra"]).size)
-        if measured_td_j.shape[0] != (nps - 1):
-            raise ValueError(
-                "measured_delays must have length n_images-1 (relative to image 0)."
-            )
-
-        mass_model = lens_image.MassModel
-
-        def _potential_jax(x, y, kwargs_lens):
-            potential = jnp.zeros_like(x)
-            for i, func in enumerate(mass_model.func_list):
-                potential = potential + func.function(x, y, **kwargs_lens[i])
-            return potential
-
-        def _fermat_potential_jax(x_image, y_image, kwargs_lens):
-            potential = _potential_jax(x_image, y_image, kwargs_lens)
-            x_source, y_source = mass_model.ray_shooting(
-                x_image, y_image, kwargs_lens
-            )
-            geometry = 0.5 * ((x_image - x_source) ** 2 + (y_image - y_source) ** 2)
-            return geometry - potential
-
-    # Ray shooting consistency setup
-    use_rayshoot = config.use_rayshoot_consistency
-    use_source_pos_rayshoot = config.use_source_position_rayshoot
-    # For Correlated Fields models, force use of mean (no src_center_x/y params)
-    is_corr_field_model = hasattr(prob_model, "source_field")
-    if is_corr_field_model and use_source_pos_rayshoot:
-        use_source_pos_rayshoot = False
-    # Use the model's setting, not config, since model determines what params exist
-    use_rayshoot_sys = getattr(prob_model, "use_rayshoot_systematic_error", False)
-    if use_rayshoot:
-        sigma2_rayshoot_fixed = jnp.asarray(config.rayshoot_consistency_sigma ** 2)
-        mass_model_rayshoot = lens_image.MassModel
-
-    # Lens gamma prior setup
-    # For uniform prior, no explicit term needed (flat)
-    # For normal prior, add truncated normal log-density term
-    use_lens_gamma_normal_prior = config.lens_gamma_prior_type == "normal"
-    if use_lens_gamma_normal_prior:
-        lens_gamma_mu = jnp.asarray(best_params["lens_gamma"])
-        lens_gamma_sigma = jnp.asarray(config.lens_gamma_prior_sigma)
-        lens_gamma_sigma2 = lens_gamma_sigma ** 2
-        # Bounds are enforced by constrain_fn (no need to store separately)
-
-    def logdensity_fn(params_unconstrained):
-        ll = -loss_obj(params_unconstrained)
-        if use_time_delays:
-            params_constrained = constrain_fn(seeded_model, (), {}, params_unconstrained)
-            D_dt = params_constrained["D_dt"]
-            kwargs = prob_model.params2kwargs(params_constrained)
-            ra = kwargs["kwargs_point_source"][0]["ra"]
-            dec = kwargs["kwargs_point_source"][0]["dec"]
-            phi = _fermat_potential_jax(ra, dec, kwargs["kwargs_lens"])
-            delta_phi = phi[1:] - phi[0]
-            dt_pred = (c_km_s / D_dt) * delta_phi
-            resid_td = dt_pred - measured_td_j
-            ll_td = -0.5 * jnp.sum(resid_td * resid_td / sigma2_td + const_td)
-            ll = ll + ll_td
-        if use_rayshoot:
-            if not use_time_delays:
-                params_constrained = constrain_fn(seeded_model, (), {}, params_unconstrained)
-                kwargs = prob_model.params2kwargs(params_constrained)
-            ra = kwargs["kwargs_point_source"][0]["ra"]
-            dec = kwargs["kwargs_point_source"][0]["dec"]
-            x_src, y_src = mass_model_rayshoot.ray_shooting(ra, dec, kwargs["kwargs_lens"])
-            if use_source_pos_rayshoot:
-                # Use sampled source position as reference
-                x_src_ref = params_constrained["src_center_x"]
-                y_src_ref = params_constrained["src_center_y"]
-            else:
-                # Use mean of ray-traced positions as reference (original behavior)
-                x_src_ref = jnp.mean(x_src)
-                y_src_ref = jnp.mean(y_src)
-            scatter = (x_src - x_src_ref) ** 2 + (y_src - y_src_ref) ** 2
-            # Compute effective sigma^2 (fixed + optional systematic)
-            if use_rayshoot_sys:
-                # Transform from log-space (the sampled parameter) to linear space
-                log_sigma_sys = params_unconstrained["log_sigma_rayshoot_sys"]
-                sigma_sys = jnp.exp(log_sigma_sys)
-                sigma2_total = sigma2_rayshoot_fixed + sigma_sys ** 2
-            else:
-                sigma2_total = sigma2_rayshoot_fixed
-            ll = ll - 0.5 * jnp.sum(scatter) / sigma2_total
-        # Add lens_gamma normal prior term (if configured)
-        # For uniform prior, nothing is added (flat prior in bounds)
-        if use_lens_gamma_normal_prior:
-            if not (use_time_delays or use_rayshoot):
-                params_constrained = constrain_fn(seeded_model, (), {}, params_unconstrained)
-            lens_gamma_val = params_constrained["lens_gamma"]
-            # Truncated normal log-prior: Gaussian penalty term
-            # (bounds already enforced by constrain_fn, so we just add Gaussian)
-            ll_prior = -0.5 * (lens_gamma_val - lens_gamma_mu) ** 2 / lens_gamma_sigma2
-            ll = ll + ll_prior
-        return ll
+    # Build log-density (handles seeding, Loss, all likelihood terms)
+    logdensity_fn, seeded_model, original_model = build_nuts_logdensity(
+        prob_model, best_params, lens_image, config,
+        measured_delays=measured_delays, delay_errors=delay_errors,
+    )
 
     num_chains = config.nuts_num_chains
     if num_chains is None:
@@ -177,6 +112,22 @@ def _run_nuts_sampling(
     rng_init = jax.random.PRNGKey(config.random_seed)
 
     def expand_for_chains(key, u):
+        """
+        Replicate a single unconstrained parameter for all chains with small noise.
+
+        Parameters
+        ----------
+        key : jax.random.PRNGKey
+            PRNG key for generating perturbations.
+        u : jax.Array
+            Unconstrained parameter value (scalar or 1-D).
+
+        Returns
+        -------
+        jax.Array
+            Array of shape ``(num_chains,) + u.shape`` with independent
+            Gaussian perturbations of scale 0.01 added.
+        """
         noise_keys = jax.random.split(key, num_chains)
         if u.ndim == 0:
             noise = jax.vmap(lambda k: jax.random.normal(k) * 0.01)(noise_keys)
@@ -271,7 +222,44 @@ def _run_nautilus_sampling(
     delay_errors: np.ndarray | None = None,
     use_corr_fields: bool = False,
 ) -> dict:
-    """Run Nautilus nested sampling."""
+    """
+    Run Nautilus nested sampling.
+
+    This function builds the prior and log-likelihood from the MAP estimate,
+    runs the Nautilus sampler, converts the weighted samples to a
+    standardised posterior dictionary, and saves the results to disk.
+
+    Parameters
+    ----------
+    best_params : dict
+        Best-fit parameter dictionary from multi-start optimisation.
+    lens_image : LensImage
+        Herculens ``LensImage`` used for forward modelling.
+    img : np.ndarray
+        2-D observed lens image.
+    noise_map : np.ndarray
+        2-D noise map (same shape as *img*).
+    config : SamplerConfig
+        Sampler configuration dataclass with Nautilus-specific settings
+        (number of live points, batch size, JAX options, etc.).
+    dirs : dict of str
+        Output directory mapping produced by ``_make_output_structure``.
+    verbose : bool
+        If ``True``, print progress information.
+    measured_delays : np.ndarray, optional
+        Measured time delays (relative to the first image).
+    delay_errors : np.ndarray, optional
+        1-sigma errors on *measured_delays*.
+    use_corr_fields : bool, optional
+        Whether the source model uses Correlated Fields.
+
+    Returns
+    -------
+    dict
+        Standardised posterior dictionary with keys ``"samples"``,
+        ``"param_names"``, ``"engine"``, ``"log_likelihood"``,
+        ``"meta"`` (including ``"log_evidence"``), etc.
+    """
     # Build prior and likelihood
     prior, paramdict_to_kwargs, loglike = build_nautilus_prior_and_loglike(
         best_params,
@@ -294,6 +282,8 @@ def _run_nautilus_sampling(
         lens_gamma_prior_high=config.lens_gamma_prior_high,
         lens_gamma_prior_sigma=config.lens_gamma_prior_sigma,
         use_corr_fields=use_corr_fields,
+        use_image_pos_offset=config.use_image_pos_offset,
+        image_pos_offset_sigma=config.image_pos_offset_sigma,
     )
 
     # Checkpoint path

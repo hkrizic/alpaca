@@ -2,6 +2,8 @@
 alpaca.pipeline.stages.plotting
 
 Posterior plot generation stage.
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -34,7 +36,41 @@ def _generate_posterior_plots(
     dirs: dict[str, str],
     config,
 ) -> None:
-    """Generate all posterior-related plots."""
+    """
+    Generate all posterior-related diagnostic and summary plots.
+
+    Depending on the plotting configuration, this function produces:
+
+    - A corner plot of selected posterior parameters.
+    - Chain trace plots (when MCMC chains are available).
+    - Model visualisations for random posterior draws and the
+      best log-likelihood sample (requires ``herculens``).
+    - A posterior ray-tracing consistency check if image-position
+      parameters are present.
+
+    Parameters
+    ----------
+    posterior : dict
+        Standardised posterior container with keys ``"samples"``,
+        ``"param_names"``, ``"log_likelihood"``, ``"engine"``, etc.
+    prob_model : ProbModel or ProbModelCorrField
+        Probabilistic model used for parameter transformations.
+    lens_image : LensImage
+        Herculens ``LensImage`` object for forward modelling.
+    img : np.ndarray
+        2-D observed lens image.
+    noise_map : np.ndarray
+        2-D noise map (same shape as *img*).
+    dirs : dict of str
+        Output directory mapping produced by ``_make_output_structure``.
+    config : PlottingConfig
+        Plotting configuration dataclass controlling which plots are
+        generated, image format, DPI, etc.
+
+    Returns
+    -------
+    None
+    """
     # Corner plot
     if config.plot_corner:
         plot_corner_posterior(
@@ -66,7 +102,23 @@ def _generate_posterior_plots(
             plotter.set_data(img)
 
             def _reconstruct_params(sample_idx):
-                """Convert flat sample to reconstructed parameter dict."""
+                """
+                Convert a flat posterior sample to a reconstructed parameter dict.
+
+                Flattened array keys (e.g. ``shapelets_amp_S_0``,
+                ``shapelets_amp_S_1``) are reassembled into a single array
+                entry ``shapelets_amp_S``.
+
+                Parameters
+                ----------
+                sample_idx : int
+                    Row index into the ``samples`` array.
+
+                Returns
+                -------
+                dict
+                    Mapping from parameter names to scalar or array values.
+                """
                 sample_dict = {name: samples[sample_idx, j] for j, name in enumerate(param_names)}
 
                 # Reconstruct array parameters from flattened keys
@@ -94,7 +146,22 @@ def _generate_posterior_plots(
                 return reconstructed
 
             def _plot_sample(sample_idx, filename, title):
-                """Plot a single posterior sample."""
+                """
+                Plot a single posterior sample using the Herculens plotter.
+
+                Parameters
+                ----------
+                sample_idx : int
+                    Row index into the ``samples`` array.
+                filename : str
+                    Output filename (written inside ``dirs["posterior_draws"]``).
+                title : str
+                    Title string for the figure.
+
+                Returns
+                -------
+                None
+                """
                 reconstructed = _reconstruct_params(sample_idx)
                 kwargs = prob_model.params2kwargs(reconstructed)
 

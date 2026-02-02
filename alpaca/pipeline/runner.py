@@ -6,6 +6,8 @@ Main pipeline orchestration: run_pipeline, load_pipeline_results.
 The pipeline accepts generic image data (img, psf_kernel, noise_map) and
 optional time-delay information.  It does NOT depend on any specific
 external data layout.
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -40,10 +42,10 @@ from alpaca.psf.iterations import run_psf_reconstruction_iterations as run_psf_i
 
 # Sampler imports
 from alpaca.sampler.gradient_descent import (
-    compute_bic_from_results,
     load_multistart_summary,
     run_gradient_descent,
 )
+from alpaca.utils.bic import compute_bic_from_results
 
 # Optional imports for plotting
 try:
@@ -227,6 +229,8 @@ def run_pipeline(
         use_rayshoot_systematic_error=config.use_rayshoot_systematic_error,
         rayshoot_sys_error_min=config.rayshoot_sys_error_min,
         rayshoot_sys_error_max=config.rayshoot_sys_error_max,
+        use_image_pos_offset=config.use_image_pos_offset,
+        image_pos_offset_sigma=config.image_pos_offset_sigma,
         use_corr_fields=config.use_corr_fields,
         corr_field_num_pixels=config.corr_field_config.num_pixels,
         corr_field_mean_intensity=config.corr_field_config.mean_intensity,
@@ -422,6 +426,7 @@ def run_pipeline(
             use_rayshoot_consistency=ms_config.use_rayshoot_consistency,
             rayshoot_consistency_sigma=ms_config.rayshoot_consistency_sigma,
             use_rayshoot_systematic_error=ms_config.use_rayshoot_systematic_error,
+            use_image_pos_offset=ms_config.use_image_pos_offset,
             max_retry_iterations=ms_config.max_retry_iterations,
             chi2_red_threshold=ms_config.chi2_red_threshold,
         )
@@ -430,10 +435,13 @@ def run_pipeline(
 
         t_ms = time.perf_counter() - t_ms_start
         if verbose:
-            best_chi2 = multistart_summary.get("best_chi2_red",
-                        multistart_summary.get("chi2_reds", [0])[multistart_summary.get("best_run", 0)])
+            best_chi2 = multistart_summary["best_chi2_red"]
+            best_run = multistart_summary["best_run"]
+            n_total = multistart_summary["total_optimizations"]
+            best_phase = multistart_summary.get("best_from_phase", "N/A")
             print(f"Multi-start completed in {t_ms:.2f}s")
-            print(f"Best chi2_red = {best_chi2:.4f}")
+            print(f"Best chi2_red = {best_chi2:.4f} "
+                  f"(run {best_run}/{n_total}, {best_phase} phase)")
 
         # Plot multi-start summary
         if config.plotting_config.save_plots:

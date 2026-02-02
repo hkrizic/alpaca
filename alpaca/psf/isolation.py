@@ -1,5 +1,11 @@
 """
 Point source isolation and cutout extraction for PSF reconstruction.
+
+This module provides functions to isolate individual point sources from
+lens model images and extract centered cutouts suitable for STARRED-based
+PSF reconstruction.
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -11,6 +17,25 @@ from alpaca.psf.utils import _build_model_with_single_ps_zeroed, _circular_mask_
 
 
 def isolate_point_sources(model_with_ps: np.ndarray, model_without_ps: np.ndarray) -> np.ndarray:
+    """
+    Isolate point sources by subtracting the model without point sources.
+
+    Computes the difference between a full lens model image (including point
+    sources) and a model image with point source amplitudes set to zero,
+    yielding an image containing only the point source contributions.
+
+    Parameters
+    ----------
+    model_with_ps : np.ndarray
+        Model image including all point sources.
+    model_without_ps : np.ndarray
+        Model image with all point source amplitudes zeroed.
+
+    Returns
+    -------
+    np.ndarray
+        Image containing only the point source contributions.
+    """
     return np.asarray(model_with_ps) - np.asarray(model_without_ps)
 
 
@@ -21,10 +46,29 @@ def generate_isolated_ps_images(
     n_point_sources: int = 4,
 ) -> list[np.ndarray]:
     """
-    Generate isolated point source images:
-        isolated_i = data - model(with PS_i amp = 0)
+    Generate isolated point source images by zeroing each source individually.
 
-    Each returned image is the FULL frame (e.g. 99x99) and is NOT shifted/recentered.
+    For each point source ``i``, builds a model image with the amplitude of
+    point source ``i`` set to zero, then subtracts that model from the
+    observed data to produce ``isolated_i = data - model(PS_i amp=0)``.
+    Each returned image is the full frame and is not shifted or recentered.
+
+    Parameters
+    ----------
+    data_image : np.ndarray
+        Observed data image (full frame).
+    prob_model : ProbModel
+        Probabilistic lens model used for forward modelling.
+    best_params : dict
+        Best-fit parameter dictionary from gradient descent optimisation.
+    n_point_sources : int, optional
+        Number of point sources to isolate. Default is 4.
+
+    Returns
+    -------
+    list[np.ndarray]
+        List of isolated point source images, one per point source.
+        Each image has the same shape as ``data_image``.
     """
     data = np.asarray(data_image)
     isolated_images: list[np.ndarray] = []
@@ -47,33 +91,47 @@ def build_centered_cutouts_from_isolated(
     global_mask_map: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """
-    Extract CENTERED cutouts from isolated images for STARRED.
+    Extract centered cutouts from isolated images for STARRED PSF reconstruction.
 
-    Each cutout is centered on its corresponding PS position, so that
-    the PS appears at the center of each stamp. This is required by STARRED's
-    internal noise propagation which shifts maps by -x0, -y0.
+    Each cutout is centered on its corresponding point source position so that
+    the point source appears at the center of each stamp. This centering is
+    required by STARRED's internal noise propagation, which shifts maps by
+    ``-x0, -y0``. Sub-pixel shifts are applied via ``scipy.ndimage.shift``.
 
     Parameters
     ----------
-    isolated_images : List[np.ndarray]
+    isolated_images : list[np.ndarray]
         List of isolated images, one per point source.
     peaks_px : np.ndarray
-        Array of (y, x) pixel coordinates for each point source.
+        Array of shape ``(N, 2)`` with ``(y, x)`` pixel coordinates for
+        each point source.
     cutout_size : int
-        Size of square cutouts (must be odd).
-    mask_other_peaks : bool
+        Size of square cutouts in pixels. Must be odd; if even, it is
+        incremented by 1.
+    mask_other_peaks : bool, optional
         If True, mask positions of other point sources in each cutout.
-    mask_radius : int
-        Radius for masking other point sources.
-    global_mask_map : np.ndarray | None
-        Optional global mask in full-frame coordinates.
+        Default is True.
+    mask_radius : int, optional
+        Radius in pixels for circular masks applied to other point source
+        positions. Default is 8.
+    global_mask_map : np.ndarray or None, optional
+        Optional global mask in full-frame coordinates (1=keep, 0=mask).
+        Default is None.
 
     Returns
     -------
-    cutouts : (N, cutout_size, cutout_size) float
-        Centered cutouts, one per PS.
-    masks : (N, cutout_size, cutout_size) float or None
-        1=keep, 0=mask. None if no masking requested.
+    tuple[np.ndarray, np.ndarray | None]
+        A tuple ``(cutouts, masks)`` where:
+
+        - ``cutouts`` has shape ``(N, cutout_size, cutout_size)`` and
+          contains the centered cutouts, one per point source.
+        - ``masks`` has shape ``(N, cutout_size, cutout_size)`` with
+          values 1=keep, 0=mask; or None if no masking was requested.
+
+    Raises
+    ------
+    ValueError
+        If the number of isolated images does not match the number of peaks.
     """
     peaks_px = np.asarray(peaks_px, float)
     N = len(isolated_images)
@@ -179,23 +237,32 @@ def build_centered_noise_cutouts(
     noise_map_is_sigma: bool = True,
 ) -> np.ndarray:
     """
-    Extract centered noise cutouts (as sigma^2) matching the PS cutouts.
+    Extract centered noise cutouts as variance maps matching point source cutouts.
+
+    Extracts square cutouts from the full-frame noise map centered on each
+    point source position, applying the same sub-pixel shifting used for
+    the image cutouts. The output is always in variance (sigma^2) units,
+    regardless of whether the input noise map is in sigma or variance units.
 
     Parameters
     ----------
     noise_map : np.ndarray
-        Full-frame noise map.
+        Full-frame noise map (2D array).
     peaks_px : np.ndarray
-        Array of (y, x) pixel coordinates for each point source.
+        Array of shape ``(N, 2)`` with ``(y, x)`` pixel coordinates for
+        each point source.
     cutout_size : int
-        Size of square cutouts (must be odd).
-    noise_map_is_sigma : bool
-        If True, noise_map contains sigma (std dev). If False, contains variance.
+        Size of square cutouts in pixels. Must be odd; if even, it is
+        incremented by 1.
+    noise_map_is_sigma : bool, optional
+        If True (default), ``noise_map`` contains standard deviation values
+        and will be squared to produce variance. If False, ``noise_map``
+        already contains variance values.
 
     Returns
     -------
-    sigma2_cutouts : (N, cutout_size, cutout_size) float
-        Variance (sigma^2) cutouts.
+    np.ndarray
+        Variance cutouts with shape ``(N, cutout_size, cutout_size)``.
     """
     peaks_px = np.asarray(peaks_px, float)
     noise_map = np.asarray(noise_map, float)

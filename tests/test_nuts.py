@@ -21,3 +21,7 @@ class TestImports:
     def test_import_posterior(self):
         from alpaca.sampler.nuts import get_nuts_posterior
         assert callable(get_nuts_posterior)
+
+    def test_import_likelihood(self):
+        from alpaca.sampler.nuts import build_nuts_logdensity
+        assert callable(build_nuts_logdensity)

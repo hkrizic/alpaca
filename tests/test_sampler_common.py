@@ -12,17 +12,6 @@ pytest.importorskip("scipy")
 jax = pytest.importorskip("jax")
 
 
-class TestConstants:
-    """Verify physical constants are exported."""
-
-    def test_constants_exist(self):
-        from alpaca.sampler.constants import C_KM_S, D_DT_MIN, D_DT_MAX
-
-        assert C_KM_S == pytest.approx(299792.458)
-        assert D_DT_MIN == 500.0
-        assert D_DT_MAX == 10000.0
-
-
 class TestEnvironmentInfo:
     """Test get_environment_info utility."""
 
@@ -58,7 +47,7 @@ class TestTnorm:
     """Test truncated normal distribution builder."""
 
     def test_basic_call(self):
-        from alpaca.sampler.priors import tnorm
+        from alpaca.sampler.nautilus.prior_utils import tnorm
 
         rv = tnorm(mu=0.0, sigma=1.0, lo=-2.0, hi=2.0)
         # Should return a frozen scipy distribution with ppf callable
@@ -66,7 +55,7 @@ class TestTnorm:
         assert callable(rv.pdf)
 
     def test_samples_within_bounds(self):
-        from alpaca.sampler.priors import tnorm
+        from alpaca.sampler.nautilus.prior_utils import tnorm
 
         rv = tnorm(mu=5.0, sigma=1.0, lo=3.0, hi=7.0)
         samples = rv.rvs(size=1000)
@@ -78,25 +67,10 @@ class TestBoundedPrior:
     """Test _bounded_prior utility."""
 
     def test_basic_call(self):
-        from alpaca.sampler.priors import _bounded_prior
+        from alpaca.sampler.nautilus.prior_utils import _bounded_prior
 
         rv = _bounded_prior(mu=1.0, sigma=0.5, lo=0.0, hi=2.0)
         assert callable(rv.ppf)
-
-
-class TestVectorToParamdict:
-    """Test _vector_to_paramdict."""
-
-    def test_basic_mapping(self):
-        from alpaca.sampler.utils import _vector_to_paramdict
-
-        names = ["a", "b", "c"]
-        vec = np.array([1.0, 2.0, 3.0])
-        result = _vector_to_paramdict(vec, names)
-        assert isinstance(result, dict)
-        assert result["a"] == 1.0
-        assert result["b"] == 2.0
-        assert result["c"] == 3.0
 
 
 class TestGetRng:

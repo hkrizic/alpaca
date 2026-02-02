@@ -1,4 +1,11 @@
-"""Arc mask creation and visualization for correlated field source models."""
+"""
+Arc mask creation and visualization for correlated field source models.
+
+Provides functions to create annular masks that isolate the lensed arc
+region, load custom masks from file, and save overlay visualizations.
+
+author: hkrizic
+"""
 
 import numpy as np
 
@@ -110,8 +117,15 @@ def save_arc_mask_visualization(
         Transparency of the mask (0-1).
     img_alpha : float
         Transparency of the image (0-1).
-    vmin_percentile, vmax_percentile : float
-        Percentiles for image scaling.
+    vmin_percentile : float
+        Lower percentile for image scaling.
+    vmax_percentile : float
+        Upper percentile for image scaling.
+
+    Returns
+    -------
+    str
+        The path where the PNG file was saved (same as *save_path*).
     """
     import matplotlib.pyplot as plt
 

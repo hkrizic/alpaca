@@ -1,5 +1,11 @@
 """
 PSF reconstruction functions using STARRED.
+
+This module wraps the STARRED PSF reconstruction library to produce both
+low-resolution and high-resolution PSF kernels from isolated point source
+cutouts.
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -56,7 +62,74 @@ def _reconstruct_psf_starred_both(
     global_mask_map: np.ndarray | None = None,
     noise_map_is_sigma: bool = True,
 ) -> dict[str, np.ndarray]:
-    """Run STARRED once and return both low- and high-res PSF kernels."""
+    """
+    Run STARRED PSF reconstruction and return both low- and high-resolution kernels.
+
+    Builds centered cutouts and noise variance maps from the isolated point
+    source images, optionally augments them with rotations, then runs
+    STARRED's multi-step PSF reconstruction procedure (L-BFGS + AdaBelief).
+    The resulting PSF kernels are normalised to unit sum.
+
+    Parameters
+    ----------
+    peaks_px : np.ndarray
+        Array of shape ``(N, 2)`` with ``(y, x)`` pixel coordinates for
+        each point source.
+    noise_map : np.ndarray
+        Full-frame noise map (2D array).
+    isolated_images : list[np.ndarray]
+        List of isolated point source images (full frame), one per source.
+    cutout_size : int, optional
+        Size of square cutouts in pixels. Default is 99.
+    supersampling_factor : int, optional
+        STARRED super-sampling factor for the high-resolution PSF.
+        Default is 3.
+    mask_other_peaks : bool, optional
+        Whether to mask other point source positions within each cutout.
+        Default is True.
+    mask_radius : int, optional
+        Radius in pixels for circular masks applied to other point source
+        positions. Default is 8.
+    rotation_mode : str or None, optional
+        Rotation augmentation mode. One of ``"none"``, ``"180"``, or
+        ``"90"``/``"all"``. Default is ``"none"``.
+    negative_sigma_threshold : float or None, optional
+        If set, mask pixels with values more negative than this many sigma
+        below zero. Default is None.
+    verbose : bool, optional
+        Whether to print progress information. Default is True.
+    debug_save_dir : str or None, optional
+        If provided, save STARRED input stamps, sigma2, and masks as FITS
+        files to this directory. Default is None.
+    export_dir : str or None, optional
+        If provided, export STARRED reconstruction products to this
+        directory. Default is None.
+    global_mask_map : np.ndarray or None, optional
+        Optional global mask in full-frame coordinates (1=keep, 0=mask).
+        Default is None.
+    noise_map_is_sigma : bool, optional
+        If True, ``noise_map`` contains standard deviation values; if
+        False, variance. Default is True.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Dictionary with keys:
+
+        - ``"psf_low_res"`` : np.ndarray -- Low-resolution PSF kernel,
+          normalised to unit sum.
+        - ``"psf_high_res"`` : np.ndarray -- High-resolution
+          (super-sampled) PSF kernel, normalised to unit sum.
+
+    Raises
+    ------
+    ImportError
+        If the ``starred-astro`` package is not installed.
+    ValueError
+        If no point source peaks are provided, PSF stamps contain no
+        finite values, or the resulting kernel has a non-finite or zero
+        sum.
+    """
     if not _HAS_STARRED:
         raise ImportError("STARRED not available. Install 'starred-astro' to use reconstruct_PSF.")
 

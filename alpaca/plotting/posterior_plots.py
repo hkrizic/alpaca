@@ -1,14 +1,17 @@
 """
 Posterior distribution plots for lens modeling.
 
+author: hkrizic
+
 Contains corner plots for Nautilus and PSO posteriors, ray-tracing
 convergence analysis from posterior samples, and generic corner plots.
 
-Functions:
-    - nautilus_corner_plot: GetDist corner plot from Nautilus posteriors.
-    - pso_corner_plot: GetDist corner plot from PSO swarm samples.
-    - plot_posterior_ray_tracing: Source plane convergence analysis.
-    - plot_corner_posterior: Generic corner plot from posterior samples.
+Functions
+---------
+plot_posterior_ray_tracing
+    Source plane convergence analysis from posterior samples.
+plot_corner_posterior
+    Generic corner plot from posterior samples.
 """
 
 import os
@@ -45,32 +48,78 @@ def plot_posterior_ray_tracing(
     dpi: int = 300,
     random_seed: int = 42,
 ) -> dict:
-    """Ray-trace image positions to source plane for posterior samples.
+    """
+    Ray-trace image positions to the source plane for posterior samples.
 
-    Produces scatter plot of back-traced source positions and histogram of
-    source position spread as a convergence quality metric.
+    Produces a scatter plot of back-traced source positions and a histogram of
+    source-position spread as a convergence quality metric.
 
-    Args:
-        samples: Posterior samples array of shape (n_total, n_params).
-        param_names: Parameter names corresponding to sample columns.
-        mass_model: Herculens MassModel instance (EPL + SHEAR).
-        n_samples: Number of samples to use. If None, use all.
-        save_path: Base path for saving plots (adds _scatter.png, _histogram.png).
-        dpi: Plot resolution.
-        random_seed: Random seed for sample selection.
+    Parameters
+    ----------
+    samples : np.ndarray
+        Posterior samples array of shape ``(n_total, n_params)``.
+    param_names : list of str
+        Parameter names corresponding to columns in ``samples``.
+    mass_model : MassModel
+        Herculens ``MassModel`` instance (EPL + SHEAR).
+    n_samples : int or None, optional
+        Number of posterior samples to use. If ``None``, all samples are
+        used, by default 100.
+    save_path : str or None, optional
+        Base path for saving plots (appends ``_scatter.png``). If ``None``,
+        no file is written.
+    dpi : int, optional
+        Resolution for saved figures, by default 300.
+    random_seed : int, optional
+        Random seed for reproducible sample selection, by default 42.
 
-    Returns:
+    Returns
+    -------
+    dict
         Dictionary containing:
-            - all_x_src, all_y_src: Back-traced positions (n_samples, n_images)
-            - spreads: Spread values for each sample
-            - mean_spread_mas, median_spread_mas: Statistics in milliarcseconds
-            - quality: Quality assessment string
 
-    Raises:
-        ValueError: If no x_image_* parameters found.
-        KeyError: If required lens parameters missing.
+        - ``all_x_src`` : np.ndarray of shape ``(n_samples, n_images)``
+          Back-traced x source positions.
+        - ``all_y_src`` : np.ndarray of shape ``(n_samples, n_images)``
+          Back-traced y source positions.
+        - ``spreads`` : np.ndarray
+          Spread values for each posterior sample (arcsec).
+        - ``mean_spread_mas`` : float
+          Mean spread in milliarcseconds.
+        - ``median_spread_mas`` : float
+          Median spread in milliarcseconds.
+        - ``quality`` : str
+          Quality assessment string.
+
+    Raises
+    ------
+    ValueError
+        If no ``x_image_*`` parameters are found in ``param_names``.
+    KeyError
+        If required lens parameters are missing from ``param_names``.
     """
     def get_param(name, sample_idx=None):
+        """
+        Retrieve a parameter column or single value from the samples array.
+
+        Parameters
+        ----------
+        name : str
+            Parameter name to look up.
+        sample_idx : int or None, optional
+            If provided, return the value for that sample index. If ``None``,
+            return the full column.
+
+        Returns
+        -------
+        np.ndarray or float
+            Parameter values for all samples or a single sample.
+
+        Raises
+        ------
+        KeyError
+            If ``name`` is not found in ``param_names``.
+        """
         try:
             idx = param_names.index(name)
         except ValueError as exc:
@@ -84,6 +133,19 @@ def plot_posterior_ray_tracing(
         raise ValueError("No x_image_* parameters found in param_names")
 
     def get_kwargs_lens(sample_idx):
+        """
+        Build Herculens ``kwargs_lens`` for a single posterior sample.
+
+        Parameters
+        ----------
+        sample_idx : int
+            Index into the samples array.
+
+        Returns
+        -------
+        list of dict
+            Two-element list: EPL parameters and SHEAR parameters.
+        """
         return [
             dict(
                 theta_E=float(get_param('lens_theta_E', sample_idx)),
@@ -102,6 +164,21 @@ def plot_posterior_ray_tracing(
         ]
 
     def get_image_positions(sample_idx):
+        """
+        Extract image-plane positions for a single posterior sample.
+
+        Parameters
+        ----------
+        sample_idx : int
+            Index into the samples array.
+
+        Returns
+        -------
+        x_imgs : np.ndarray
+            x-coordinates of the lensed images.
+        y_imgs : np.ndarray
+            y-coordinates of the lensed images.
+        """
         x_imgs = np.array([get_param(f'x_image_{i}', sample_idx) for i in range(n_images)])
         y_imgs = np.array([get_param(f'y_image_{i}', sample_idx) for i in range(n_images)])
         return x_imgs, y_imgs
@@ -223,7 +300,40 @@ def plot_corner_posterior(
     dpi: int = 300,
     truths: dict[str, float] | None = None,
 ) -> None:
-    """Create corner plot from posterior samples."""
+    """
+    Create a corner plot from posterior samples.
+
+    Uses ``getdist`` when available for publication-quality triangle plots,
+    falling back to the ``corner`` package. If ``D_dt`` is among the
+    parameters it is always placed last. Parameters are automatically
+    limited to ``max_params``.
+
+    Parameters
+    ----------
+    posterior : dict
+        Dictionary with keys ``"samples"`` (2-D array of shape
+        ``(n_samples, n_params)``) and ``"param_names"`` (list of str).
+    param_names : list of str or None, optional
+        Subset of parameter names to include. If ``None``, the first
+        ``max_params`` parameters are used (with ``D_dt`` forced last
+        when present).
+    max_params : int, optional
+        Maximum number of parameters to display, by default 10.
+    save_path : str or None, optional
+        File path to save the figure. If ``None``, the plot is not saved.
+    title : str, optional
+        Figure title (used only with the ``corner`` backend),
+        by default ``"Posterior"``.
+    dpi : int, optional
+        Resolution for the saved figure, by default 300.
+    truths : dict of str to float or None, optional
+        Known true values to mark on the plot, keyed by parameter name.
+
+    Returns
+    -------
+    None
+        The plot is saved to disk at ``save_path`` when provided.
+    """
     if not _HAS_CORNER and not _HAS_GETDIST:
         warnings.warn("Neither corner nor getdist available for corner plots", stacklevel=2)
         return

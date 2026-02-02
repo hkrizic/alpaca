@@ -1,5 +1,12 @@
 """
 Iterative PSF reconstruction pipeline.
+
+This module implements the iterative loop for PSF reconstruction: at each
+iteration, a multi-start gradient descent optimisation is performed using the
+current PSF estimate, isolated point source images are extracted from the
+best-fit model, and a new PSF is reconstructed via STARRED.
+
+author: hkrizic
 """
 
 from __future__ import annotations
@@ -64,19 +71,97 @@ def run_psf_reconstruction_iterations(
     """
     Run an iterative PSF reconstruction loop.
 
+    At each iteration *k*, the pipeline performs three steps:
+
+    1. Run multi-start lens modelling using PSF_{k-1}.
+    2. Build isolated point-source images from the best-fit model.
+    3. Reconstruct PSF_k with STARRED from those isolated images.
+
+    The updated PSF from each iteration is fed into the next iteration's
+    multi-start optimisation.
+
     Parameters
     ----------
     setup : dict
-        Pre-built setup dictionary (e.g. from ``setup_lens``).
+        Pre-built setup dictionary (e.g. from ``setup_lens``), containing
+        keys such as ``"img"``, ``"noise_map"``, ``"peaks_px"``,
+        ``"psf_kernel"``, ``"pixel_grid"``, ``"ps_grid"``, ``"xgrid"``,
+        ``"ygrid"``, ``"x0s"``, ``"y0s"``, ``"peak_vals"``, and
+        ``"prob_model"``.
     output_dir : str
         Root directory for all output products.
+    n_iterations : int, optional
+        Number of PSF reconstruction iterations. Default is 3.
+    n_starts : int, optional
+        Number of random starts for the multi-start gradient descent.
+        Default is 20.
+    multistart_min_starts : int, optional
+        Minimum number of starts before early stopping. Default is 3.
+    multistart_max_starts : int or None, optional
+        Maximum number of starts. If None, uses ``n_starts``. Default is
+        None.
+    multistart_chi2_red_threshold : float or None, optional
+        Reduced chi-squared threshold for retry logic. Default is 4.0.
+    random_seed : int, optional
+        Random seed for reproducibility. Default is 73.
+    do_preopt : bool, optional
+        Whether to run Adam pre-optimisation. Default is True.
+    adam_steps : int, optional
+        Number of Adam optimiser steps. Default is 250.
+    adam_lr : float, optional
+        Adam learning rate. Default is 3e-3.
+    maxiter : int, optional
+        Maximum L-BFGS iterations. Default is 600.
+    rel_eps : float, optional
+        Relative convergence tolerance for L-BFGS. Default is 0.01.
+    starred_cutout_size : int, optional
+        Size of square cutouts for STARRED (pixels). Default is 99.
+    starred_supersampling_factor : int, optional
+        STARRED PSF super-sampling factor. Default is 3.
+    starred_mask_other_peaks : bool, optional
+        Whether to mask other point source positions in cutouts.
+        Default is True.
+    starred_mask_radius : int, optional
+        Radius in pixels for masking other point sources and the lens
+        centre. Default is 8.
+    starred_rotation_mode : str or None, optional
+        Rotation augmentation mode for STARRED stamps. One of ``"none"``,
+        ``"180"``, or ``"90"``. Default is ``"none"``.
+    starred_negative_sigma_threshold : float or None, optional
+        If set, mask pixels more negative than this many sigma. Default
+        is None.
+    save_products : bool, optional
+        Whether to save intermediate FITS products. Default is True.
+    verbose_starred : bool, optional
+        Whether to print verbose STARRED output. Default is True.
+    starred_global_mask_map : np.ndarray or None, optional
+        Optional global mask map in full-frame coordinates. Default is None.
+    noise_map_is_sigma : bool, optional
+        If True, the noise map contains sigma values; if False, variance.
+        Default is True.
+    run_multistart_bool : bool, optional
+        If True, run multi-start optimisation; if False, load results from
+        a previous run. Default is True.
+    parallelized_bool : bool, optional
+        Whether to use parallelized multi-start. Default is True.
 
-    Iteration k:
-      1) Run multistart lens modelling using PSF_{k-1}
-      2) Build isolated point-source images from the best-fit model
-      3) Reconstruct PSF_k with STARRED from those isolated images
+    Returns
+    -------
+    dict
+        Dictionary containing:
 
-    The updated PSF from each iteration is fed into the next iteration's multistart.
+        - ``"outdir"`` : str -- Output directory path.
+        - ``"n_iterations"`` : int -- Number of iterations performed.
+        - ``"psf_initial"`` : np.ndarray -- Initial PSF kernel.
+        - ``"psf_final"`` : np.ndarray -- Final reconstructed PSF kernel.
+        - ``"iterations"`` : list[dict] -- Per-iteration results with
+          keys ``"iteration_index"``, ``"best_params"``,
+          ``"psf_input"``, ``"psf_updated"``, ``"psf_residual"``, etc.
+
+    Raises
+    ------
+    ValueError
+        If ``n_iterations`` is less than 1.
     """
     n_iterations = int(n_iterations)
     if n_iterations < 1:

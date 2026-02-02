@@ -13,9 +13,9 @@ ALPACA is a modular, JAX-accelerated pipeline for gravitational lens modeling an
 ## Features
 
 - **Various Source Light Profiles**
-  - Sèrsic
+  - Sersic
   - Shapelets
-  - Correlated Fields (using Nifty) <- under construction
+  - Correlated Fields (pixelated source with Gaussian Process prior via nifty8)
 
 - **Inference Methods**
   - Multi-start gradient descent (Adam + L-BFGS) for initialization
@@ -195,28 +195,22 @@ config = PipelineConfig(
 ```
 ## PSF Reconstruction
 
-Reconstruct the PSF using STARRED:
+Run iterative PSF reconstruction using STARRED. Each iteration performs multi-start lens modeling, extracts isolated point-source images, and reconstructs the PSF:
 
 ```python
-from alpaca.psf import reconstruct_PSF, generate_isolated_ps_images
+from alpaca.data.setup import setup_lens
+from alpaca.psf import run_psf_reconstruction_iterations
 
-# Generate isolated point source images
-isolated_images = generate_isolated_ps_images(
-    data_image,
-    prob_model,
-    best_params,
-    n_point_sources=4,
+# setup is a dict returned by setup_lens()
+results = run_psf_reconstruction_iterations(
+    setup,
+    output_dir="results/psf",
+    n_iterations=4,
+    n_starts=20,
+    starred_cutout_size=99,
+    starred_supersampling_factor=3,
 )
-
-# Reconstruct PSF
-new_psf = reconstruct_PSF(
-    current_psf=psf_kernel,
-    peaks_px=point_source_positions,
-    noise_map=noise_map,
-    isolated_images=isolated_images,
-    cutout_size=99,
-    supersampling_factor=3,
-)
+refined_psf = results["psf_kernel"]
 ```
 
 ## Inference Methods
@@ -279,6 +273,7 @@ samples = results["samples"]
 ├── run_config.py              # User-editable configuration (generic)
 ├── run_config_TDC.py          # User-editable configuration (TDLMC)
 ├── tdlmc_helper.py            # TDLMC data loading and path helpers
+├── pyproject.toml             # Project metadata and dependencies
 ├── tests/                     # Test suite (pytest)
 │
 └── alpaca/
@@ -286,8 +281,7 @@ samples = results["samples"]
     ├── config.py              # Configuration dataclasses (PipelineConfig, etc.)
     │
     ├── pipeline/              # Pipeline orchestration
-    │   ├── __init__.py        #   re-exports: run_pipeline, load_pipeline_results
-    │   ├── runner.py          #   main pipeline runner
+    │   ├── runner.py          #   main pipeline runner (run_pipeline, load_pipeline_results)
     │   ├── io.py              #   output directory setup, FITS/JSON serialization
     │   ├── setup.py           #   model building, point-source matching, time-delay loading
     │   └── stages/
@@ -305,19 +299,18 @@ samples = results["samples"]
     │   └── prob_model.py      #   ProbModel (Shapelets) and ProbModelCorrField
     │
     ├── sampler/               # Optimization and sampling
-    │   ├── constants.py       #   physical constants (D_dt bounds, c)
-    │   ├── priors.py          #   truncated-normal and bounded priors
-    │   ├── losses.py          #   time-delay and ray-shooting loss functions
     │   ├── utils.py           #   RNG, environment info, conversions
-    │   ├── likelihood.py      #   likelihood construction
     │   ├── gradient_descent/
     │   │   ├── optimizer.py   #   Adam + L-BFGS multi-start optimization
-    │   │   └── bic.py         #   Bayesian Information Criterion
+    │   │   └── likelihood.py  #   loss functions (imaging, time-delay, ray-shooting)
     │   ├── nautilus/
     │   │   ├── prior.py       #   Nautilus prior mapping
+    │   │   ├── prior_utils.py #   truncated-normal and bounded priors
+    │   │   ├── likelihood.py  #   Nautilus likelihood construction (NumPy and JAX)
     │   │   ├── sampler.py     #   Nautilus nested sampler wrapper
     │   │   └── posterior.py   #   posterior extraction from Nautilus
     │   └── nuts/
+    │       ├── likelihood.py  #   NUTS log-density construction
     │       ├── sampler.py     #   NumPyro NUTS wrapper
     │       └── posterior.py   #   posterior extraction from NUTS
     │
@@ -327,20 +320,23 @@ samples = results["samples"]
     │   └── diagnostics.py     #   optimization, chain, and PSF diagnostics
     │
     ├── psf/                   # PSF reconstruction (STARRED)
-    │   ├── reconstruction.py  #   main PSF reconstruction driver
+    │   ├── reconstruction.py  #   STARRED PSF reconstruction driver
     │   ├── iterations.py      #   iterative refinement loop
-    │   ├── isolation.py       #   star isolation and cutout extraction
+    │   ├── isolation.py       #   point-source isolation and cutout extraction
     │   └── utils.py           #   PSF helper functions
     │
     └── utils/                 # Shared utilities
         ├── cosmology.py       #   D_dt, time-delay prediction, H0 conversions
+        ├── bic.py             #   Bayesian Information Criterion
         └── jax_helpers.py     #   JAX pytree utilities
 ```
 
 ## Testing
 
 ```bash
-pytest tests/ -v
+pytest tests/ -v                                    # Run all tests
+pytest tests/ -v -m "not slow and not gpu"          # Skip slow/GPU tests
+pytest tests/ -v --cov=alpaca --cov-report=term-missing  # With coverage
 ```
 
 ## License

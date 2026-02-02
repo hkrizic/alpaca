@@ -1,4 +1,8 @@
-"""JAX utility functions for pytree manipulation."""
+"""
+JAX utility functions for pytree manipulation.
+
+author: hkrizic
+"""
 
 import jax
 from jax.tree_util import tree_leaves
@@ -6,25 +10,36 @@ from jax.tree_util import tree_leaves
 
 @jax.jit
 def get_value_from_index(xs, i):
-    """Extract the i-th element from each leaf of a pytree.
+    """
+    Extract the i-th element from each leaf of a pytree.
 
-    Args:
-        xs: JAX pytree with array leaves.
-        i: Index to extract.
+    Parameters
+    ----------
+    xs : pytree
+        JAX pytree with array leaves.
+    i : int
+        Index to extract.
 
-    Returns:
+    Returns
+    -------
+    pytree
         Pytree with same structure, each leaf replaced by its i-th element.
     """
     return jax.tree.map(lambda x: x[i], xs)
 
 
 def is_batched_pytree(params):
-    """Check if a pytree contains batched (multi-sample) parameters.
+    """
+    Check if a pytree contains batched (multi-sample) parameters.
 
-    Args:
-        params: JAX pytree to check.
+    Parameters
+    ----------
+    params : pytree
+        JAX pytree to check.
 
-    Returns:
+    Returns
+    -------
+    bool
         True if all leaves are arrays with shape[0] > 1.
     """
     leaves = tree_leaves(params)

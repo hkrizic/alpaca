@@ -1,6 +1,11 @@
 """
-High-level lens setup: setup_lens orchestrates grid, detection, mask,
-noise, and model creation for a single lens system.
+High-level lens setup.
+
+``setup_lens`` orchestrates grid construction, point-source detection,
+mask creation, noise boosting, and probabilistic model creation for a
+single gravitational lens system.
+
+author: hkrizic
 """
 
 import os
@@ -38,6 +43,8 @@ def setup_lens(
     use_rayshoot_systematic_error: bool = False,
     rayshoot_sys_error_min: float = 0.00005,
     rayshoot_sys_error_max: float = 0.005,
+    use_image_pos_offset: bool = False,
+    image_pos_offset_sigma: float = 0.01,
     # Correlated Fields parameters
     use_corr_fields: bool = False,
     corr_field_num_pixels: int = 80,
@@ -94,8 +101,10 @@ def setup_lens(
         Additional kwargs for noise boosting.
     use_rayshoot_systematic_error : bool
         Include ray shooting systematic error.
-    rayshoot_sys_error_min, rayshoot_sys_error_max : float
-        Bounds for systematic error.
+    rayshoot_sys_error_min : float
+        Lower bound for ray-shooting systematic error.
+    rayshoot_sys_error_max : float
+        Upper bound for ray-shooting systematic error.
     use_corr_fields : bool
         Use Correlated Fields for source (mutually exclusive with use_source_shapelets).
     corr_field_num_pixels : int
@@ -108,25 +117,44 @@ def setup_lens(
         Prior for smoothness (mean, std). More negative = smoother.
     corr_field_fluctuations : tuple
         Prior for fluctuations (mean, std).
-    corr_field_flexibility, corr_field_asperity : tuple, optional
-        Additional GP priors.
+    corr_field_flexibility : tuple of float or None
+        Prior for GP flexibility (mean, std).  ``None`` to omit.
+    corr_field_asperity : tuple of float or None
+        Prior for GP asperity (mean, std).  ``None`` to omit.
     corr_field_cropped_border_size : int
         Border cropping for FFT.
     corr_field_exponentiate : bool
         Exponentiate field for positivity.
     corr_field_interpolation : str
         Interpolation method for pixelated source.
-    arc_mask_inner_radius, arc_mask_outer_radius : float
-        Radii for arc mask (arcsec).
+    use_image_pos_offset : bool
+        Allow offsets on image positions during sampling.
+    image_pos_offset_sigma : float
+        Gaussian sigma for image position offsets (arcsec).
+    arc_mask_inner_radius : float
+        Inner radius for the annular arc mask (arcsec).
+    arc_mask_outer_radius : float
+        Outer radius for the annular arc mask (arcsec).
+    custom_arc_mask_path : str or None
+        Path to a custom arc mask file (``.npy`` or ``.fits``).  When
+        provided, the annular mask parameters are ignored.
+    output_dir : str or None
+        Directory for saving diagnostic outputs (e.g. mask
+        visualizations).  If ``None``, no files are written.
 
     Returns
     -------
-    Dict
-        Setup dictionary with all components for inference.
+    dict
+        Setup dictionary with all components for inference:
+        - img, psf_kernel, noise_map
+        - pixel_grid, ps_grid, xgrid, ygrid
+        - peaks_px, x0s, y0s, peak_vals
+        - lens_image, plotter, prob_model
+        - pix_scl
+        - source_field, source_arc_mask (if use_corr_fields)
+        - use_corr_fields, corr_field_num_pixels
     """
-    # Local imports to avoid circular dependencies:
-    # prob_model imports nothing from data.setup, but data.setup creates
-    # ProbModel / ProbModelCorrField instances, so we import here.
+    # prob_model imports nothing from data.setup, but data.setup creates ProbModel / ProbModelCorrField instances, so we import here.
     from alpaca.models.prob_model import (
         ProbModel,
         ProbModelCorrField,
@@ -210,7 +238,7 @@ def setup_lens(
             )
             print(f"Saved arc mask visualization to: {mask_vis_path}")
 
-    # Build lens image with appropriate source model
+    # make_lens_image creates lens image, noise map, psf, mass model, lens light, source light and point source model in herculens format
     (
         lens_image,
         noise,
@@ -235,7 +263,7 @@ def setup_lens(
         source_arc_mask=source_arc_mask,
     )
 
-    plotter = make_plotter(img)
+    plotter = make_plotter(img) # for visualization (herculens Plotter)
 
     # Create the appropriate probabilistic model
     source_field = None
@@ -268,6 +296,8 @@ def setup_lens(
             use_rayshoot_systematic_error=use_rayshoot_systematic_error,
             rayshoot_sys_error_min=rayshoot_sys_error_min,
             rayshoot_sys_error_max=rayshoot_sys_error_max,
+            use_image_pos_offset=use_image_pos_offset,
+            image_pos_offset_sigma=image_pos_offset_sigma,
         )
     else:
         # Use standard ProbModel (with or without Shapelets)
@@ -285,6 +315,8 @@ def setup_lens(
             use_rayshoot_systematic_error=use_rayshoot_systematic_error,
             rayshoot_sys_error_min=rayshoot_sys_error_min,
             rayshoot_sys_error_max=rayshoot_sys_error_max,
+            use_image_pos_offset=use_image_pos_offset,
+            image_pos_offset_sigma=image_pos_offset_sigma,
         )
 
     return dict(
@@ -307,4 +339,5 @@ def setup_lens(
         source_field=source_field,
         source_arc_mask=source_arc_mask,
         use_corr_fields=use_corr_fields,
+        corr_field_num_pixels=corr_field_num_pixels,
     )

@@ -2,6 +2,8 @@
 
 Converts raw NUTS samples into the standardized posterior format,
 including transformation from unconstrained to constrained space.
+
+author: hkrizic
 """
 
 
@@ -22,15 +24,22 @@ def get_nuts_posterior(nuts_results: dict, prob_model=None, n_samples=None, rand
     NUTS samples are in unconstrained space. If prob_model is provided,
     samples are transformed back to constrained (physical) space.
 
-    Args:
-        nuts_results: Output from run_nuts_numpyro or load_nuts_samples
-            containing 'samples' and 'log_density'.
-        prob_model: The probabilistic model used for sampling (optional).
-            Required to transform samples to constrained space.
-        n_samples: Optional subsampling to fixed sample count.
-        random_seed: Seed for reproducible subsampling.
+    Parameters
+    ----------
+    nuts_results : dict
+        Output from run_nuts_numpyro or load_nuts_samples containing
+        'samples' and 'log_density'.
+    prob_model : herculens ProbModel or None
+        The probabilistic model used for sampling. Required to transform
+        samples to constrained space.
+    n_samples : int or None
+        Optional subsampling to fixed sample count.
+    random_seed : int or None
+        Seed for reproducible subsampling.
 
-    Returns:
+    Returns
+    -------
+    dict
         Standardized posterior container with equally-weighted samples
         in constrained (physical) space.
     """

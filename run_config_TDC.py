@@ -1,6 +1,6 @@
 """
-Run Configuration for Alpaca Pipeline
-======================================
+Run Configuration for Alpaca Pipeline (TDLMC)
+=============================================
 
 Edit the settings below, then call ``load_config()`` to get a ready-to-use
 ``PipelineConfig`` object.
@@ -8,6 +8,8 @@ Edit the settings below, then call ``load_config()`` to get a ready-to-use
 TDLMC-specific helpers (data loading, time-delay parsing) are provided by
 ``tdlmc_helper`` at the repository root.  The Alpaca package itself is
 generic and knows nothing about TDLMC paths or file formats.
+
+author: hkrizic
 """
 
 import datetime
@@ -26,24 +28,24 @@ from alpaca.config import (
 # DATA IDENTIFICATION  (TDLMC-specific)
 # =============================================================================
 BASE_DIR = "."
-RUNG = 2
+RUNG = 1
 CODE_ID = 1       # or read from env: int(os.environ.get("LENS_CODE", 1))
-SEED = 120        # or read from env: int(os.environ.get("LENS_SEED", 120))
+SEED = 101        # or read from env: int(os.environ.get("LENS_SEED", 120))
 
 # =============================================================================
 # SOURCE LIGHT MODEL  (choose ONE)
 # =============================================================================
 # Option 1: Shapelets (analytic basis functions)
-USE_SHAPELETS = True
+USE_SHAPELETS = False
 SHAPELETS_N_MAX = 6
 
 # Option 2: Correlated Fields (pixelated source with GP prior)
-USE_CORR_FIELDS = False  # set True to use instead of Shapelets
+USE_CORR_FIELDS = True  # set True to use instead of Shapelets
 
 # =============================================================================
 # CORRELATED FIELD HYPERPARAMETERS  (only used if USE_CORR_FIELDS = True)
 # =============================================================================
-CORR_FIELD_NUM_PIXELS = 80
+CORR_FIELD_NUM_PIXELS = 160
 CORR_FIELD_LOGLOGAVGSLOPE = (-6.0, 0.5)   # smoothness prior (smaller = smoother)
 CORR_FIELD_FLUCTUATIONS = (1.0, 0.5)       # fluctuation amplitude prior
 CORR_FIELD_MEAN_INTENSITY = None            # None = auto-estimate from data
@@ -80,6 +82,10 @@ USE_SOURCEPOSITION_RAYSHOOT = True   # compare to sampled source position
 USE_RAYSHOOT_SYSTEMATIC_ERROR = True
 RAYSHOOT_SYS_ERROR_MIN = 0.00005  # arcsec (0.05 mas)
 RAYSHOOT_SYS_ERROR_MAX = 0.005    # arcsec (5 mas)
+
+# Image position offset for TD/rayshoot terms (accounts for astrometric errors)
+USE_IMAGE_POS_OFFSET = False
+IMAGE_POS_OFFSET_SIGMA = 0.01    # arcsec, prior sigma for offsets
 
 # =============================================================================
 # GRADIENT DESCENT / MULTI-START
@@ -125,11 +131,21 @@ PS_FALLBACK_TO_TRUTH = True  # use truth positions if detection fails
 # =============================================================================
 
 def load_config() -> PipelineConfig:
-    """Build a ``PipelineConfig`` from the settings defined above.
+    """
+    Build a ``PipelineConfig`` from the settings defined above.
 
-    The output directory is derived from the TDLMC identifiers
-    (``BASE_DIR``, ``RUNG``, ``CODE_ID``, ``SEED``) via
-    ``tdlmc_helper.tdlmc_paths``.
+    Reads all module-level constants (source model, sampler, likelihood,
+    gradient descent, PSF, and prior settings) and assembles them into a
+    single ``PipelineConfig`` dataclass.  The output directory is derived
+    from the TDLMC identifiers (``BASE_DIR``, ``RUNG``, ``CODE_ID``,
+    ``SEED``) via ``tdlmc_helper.tdlmc_paths`` and timestamped with the
+    current date and time.
+
+    Returns
+    -------
+    PipelineConfig
+        Fully populated pipeline configuration object ready for
+        ``run_pipeline()``.
     """
     from tdlmc_helper import tdlmc_paths
 
@@ -184,6 +200,8 @@ def load_config() -> PipelineConfig:
         use_rayshoot_systematic_error=USE_RAYSHOOT_SYSTEMATIC_ERROR,
         rayshoot_sys_error_min=RAYSHOOT_SYS_ERROR_MIN,
         rayshoot_sys_error_max=RAYSHOOT_SYS_ERROR_MAX,
+        use_image_pos_offset=USE_IMAGE_POS_OFFSET,
+        image_pos_offset_sigma=IMAGE_POS_OFFSET_SIGMA,
 
         # Phase toggles
         run_psf_reconstruction=RUN_PSF_RECONSTRUCTION,
@@ -216,6 +234,7 @@ def load_config() -> PipelineConfig:
             use_rayshoot_systematic_error=USE_RAYSHOOT_SYSTEMATIC_ERROR,
             rayshoot_sys_error_min=RAYSHOOT_SYS_ERROR_MIN,
             rayshoot_sys_error_max=RAYSHOOT_SYS_ERROR_MAX,
+            use_image_pos_offset=USE_IMAGE_POS_OFFSET,
             max_retry_iterations=MAX_RETRY_ITERATIONS,
             chi2_red_threshold=CHI2_RED_THRESHOLD,
         ),
@@ -229,6 +248,8 @@ def load_config() -> PipelineConfig:
             use_rayshoot_systematic_error=USE_RAYSHOOT_SYSTEMATIC_ERROR,
             rayshoot_sys_error_min=RAYSHOOT_SYS_ERROR_MIN,
             rayshoot_sys_error_max=RAYSHOOT_SYS_ERROR_MAX,
+            use_image_pos_offset=USE_IMAGE_POS_OFFSET,
+            image_pos_offset_sigma=IMAGE_POS_OFFSET_SIGMA,
             nuts_num_warmup=NUTS_NUM_WARMUP,
             nuts_num_samples=NUTS_NUM_SAMPLES,
             nuts_num_chains=None,
@@ -276,6 +297,8 @@ def load_config() -> PipelineConfig:
     if USE_RAYSHOOT_SYSTEMATIC_ERROR:
         print(f"  Ray shooting systematic error: free parameter "
               f"[{RAYSHOOT_SYS_ERROR_MIN}, {RAYSHOOT_SYS_ERROR_MAX}] arcsec")
+    if USE_IMAGE_POS_OFFSET:
+        print(f"  Image position offset: enabled (sigma={IMAGE_POS_OFFSET_SIGMA} arcsec)")
     if MAX_RETRY_ITERATIONS > 1:
         print(f"  Gradient descent retry: up to {MAX_RETRY_ITERATIONS} "
               f"iterations if chi2_red > {CHI2_RED_THRESHOLD:.2f}")
@@ -292,7 +315,12 @@ def load_config() -> PipelineConfig:
 
 
 def load_tdlmc_data():
-    """Load TDC image data.
+    """
+    Load TDC image data from the drizzled image folder.
+
+    Uses the module-level ``BASE_DIR``, ``RUNG``, ``CODE_ID``, and
+    ``SEED`` constants to locate the TDLMC data directory and reads the
+    lens image, PSF kernel, and noise map FITS files.
 
     Returns
     -------
@@ -301,7 +329,7 @@ def load_tdlmc_data():
     psf_kernel : np.ndarray
         2-D PSF kernel.
     noise_map : np.ndarray
-        2-D noise map.
+        2-D noise map (same shape as *img*).
     """
     from tdlmc_helper import load_tdlmc_image, tdlmc_paths
 
@@ -310,20 +338,36 @@ def load_tdlmc_data():
 
 
 def load_tdlmc_time_delays(x0s, y0s):
-    """Load TDC time delay data matched to detected positions.
+    """
+    Load TDC time delay data matched to detected positions.
+
+    Reads measured time delays from the TDLMC good-team file and matches
+    them to the ordering of the detected point-source images using truth
+    positions from the open-box file.  Uses the module-level ``BASE_DIR``,
+    ``RUNG``, ``CODE_ID``, ``SEED``, and ``PS_FALLBACK_TO_TRUTH``
+    constants.
 
     Parameters
     ----------
-    x0s, y0s : array-like
-        Detected point-source image positions.
+    x0s : array-like
+        Detected point-source x positions in arcsec.
+    y0s : array-like
+        Detected point-source y positions in arcsec.
 
     Returns
     -------
     measured_delays : np.ndarray
+        Time delays relative to the reference image, in days.
     delay_errors : np.ndarray
-    det_labels : list
+        1-sigma errors on the measured delays, in days.
+    det_labels : list of str
+        Ordered image labels (e.g. ``["A", "B", "C", "D"]``) matching
+        the detected image ordering.
     used_fallback : bool
-    truth_positions : tuple or None
+        ``True`` if truth positions were used because the number of
+        detected images did not match the truth.
+    truth_positions : tuple of (np.ndarray, np.ndarray) or None
+        ``(x_truth, y_truth)`` if fallback was used, otherwise ``None``.
     """
     from tdlmc_helper import load_time_delay_data
 

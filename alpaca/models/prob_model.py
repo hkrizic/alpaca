@@ -1,6 +1,8 @@
 """
 Probabilistic lens models and lens image construction for strong lens modeling.
-Includes STARRED PSF reconstruction support and Correlated Field source models.
+Includes Correlated Field source model support. 
+
+author: hkrizic
 """
 
 
@@ -118,6 +120,7 @@ def make_lens_image(
 
     point_source_model = PointSourceModel(["IMAGE_POSITIONS"], mass_model, ps_grid)
 
+    # TODO: Check kwargs_numerics options
     kwargs_numerics = dict(
         supersampling_factor=supersampling_factor,
         convolution_type=convolution_type,
@@ -133,7 +136,7 @@ def make_lens_image(
         lens_light_model_class=lens_light_model,
         source_model_class=source_light_model,
         point_source_model_class=point_source_model,
-        source_arc_mask=source_arc_mask if use_corr_fields else None,
+        source_arc_mask=source_arc_mask if use_corr_fields else None, # apply arc mask only if using correlated fields
         kwargs_numerics=kwargs_numerics,
     )
 
@@ -203,24 +206,24 @@ def create_corr_field(
             "CorrelatedField requires herculens with correlated_field support. "
             "Please update herculens."
         )
-
+    
     # Estimate mean intensity from data if not specified
     if mean_intensity is None:
         mean_intensity = float(np.percentile(img, 70))
         mean_intensity = max(mean_intensity, 1e-4)
 
-    # Create the CorrelatedField
+    # Create the CorrelatedField in herculens
     source_field = CorrelatedField(
         "source_pixels",
         source_model,
         offset_mean=np.log(mean_intensity) if exponentiate else mean_intensity,
-        prior_offset_std=offset_std,
+        prior_offset_std=offset_std, # prior on offset std dev
         prior_loglogavgslope=loglogavgslope,
         prior_fluctuations=fluctuations,
-        prior_flexibility=flexibility,
-        prior_asperity=asperity,
-        cropped_border_size=cropped_border_size,
-        exponentiate=exponentiate,
+        prior_flexibility=flexibility, # prior on flexibility, which controls variations on slope
+        prior_asperity=asperity, # prior on asperity, which controls roughness
+        cropped_border_size=cropped_border_size, 
+        exponentiate=exponentiate, # ensure positive intensities
     )
 
     return source_field
@@ -228,8 +231,50 @@ def create_corr_field(
 
 class ProbModel(NumpyroModel):
     """
-    NumPyro probabilistic model for strong lens modeling:
-    EPL+Shear, Sersic lens/source, optional Shapelets, Point Sources.
+    NumPyro probabilistic model for strong lens modeling with analytic source profiles.
+
+    Implements an EPL+Shear mass model, Sersic lens and source light profiles,
+    optional Shapelets basis for the source, and point sources at image positions.
+    This is the standard model used when `use_corr_fields=False`.
+
+    Attributes
+    ----------
+    lens_image : LensImage
+        Herculens LensImage object encapsulating the full lens model.
+    data : jnp.ndarray
+        Observed image data as a JAX array.
+    noise_map : jnp.ndarray
+        Per-pixel noise standard deviation as a JAX array.
+    xgrid : jnp.ndarray
+        X-coordinate grid of the image pixels.
+    ygrid : jnp.ndarray
+        Y-coordinate grid of the image pixels.
+    x0s : jnp.ndarray
+        Initial x-positions of detected point source images.
+    y0s : jnp.ndarray
+        Initial y-positions of detected point source images.
+    peak_vals : jnp.ndarray
+        Initial peak amplitudes of detected point source images.
+    use_source_shapelets : bool
+        Whether Shapelets basis functions are used for the source light.
+    shapelets_n_max : int
+        Maximum Shapelets order (number of basis functions scales quadratically).
+    shapelets_beta_min : float
+        Lower bound of the uniform prior on the Shapelets scale parameter.
+    shapelets_beta_max : float
+        Upper bound of the uniform prior on the Shapelets scale parameter.
+    shapelets_amp_sigma : float
+        Scale factor for Shapelets amplitude prior standard deviation.
+    use_rayshoot_systematic_error : bool
+        Whether to include a free ray-shooting systematic error parameter.
+    rayshoot_sys_error_min : float
+        Lower bound (arcsec) for the ray-shooting systematic error.
+    rayshoot_sys_error_max : float
+        Upper bound (arcsec) for the ray-shooting systematic error.
+    use_image_pos_offset : bool
+        Whether to include free image position offsets for time-delay terms.
+    image_pos_offset_sigma : float
+        Prior sigma (arcsec) for image position offsets.
     """
 
     def __init__(
@@ -250,7 +295,60 @@ class ProbModel(NumpyroModel):
         use_rayshoot_systematic_error: bool = False,
         rayshoot_sys_error_min: float = 0.00005,
         rayshoot_sys_error_max: float = 0.005,
+        use_image_pos_offset: bool = False,
+        image_pos_offset_sigma: float = 0.01,
     ):
+        """
+        Initialize the ProbModel with lens configuration and observed data.
+
+        Parameters
+        ----------
+        lens_image : LensImage
+            Herculens LensImage object containing mass, light, and point source models.
+        img : np.ndarray
+            2D observed image array.
+        noise_map : np.ndarray
+            2D per-pixel noise standard deviation array, same shape as ``img``.
+        xgrid : np.ndarray
+            2D array of x-coordinates for each pixel in the image plane.
+        ygrid : np.ndarray
+            2D array of y-coordinates for each pixel in the image plane.
+        x0s : np.ndarray
+            1D array of initial x-positions of detected point source images.
+        y0s : np.ndarray
+            1D array of initial y-positions of detected point source images.
+        peak_vals : np.ndarray
+            1D array of initial peak amplitudes of detected point source images.
+        use_source_shapelets : bool, optional
+            If True, add a Shapelets component to the source light model.
+            Default is False.
+        shapelets_n_max : int, optional
+            Maximum order for Shapelets decomposition. The number of basis
+            functions is ``(n_max + 1) * (n_max + 2) / 2``. Default is 6.
+        shapelets_beta_min : float, optional
+            Lower bound of the uniform prior on the Shapelets scale parameter
+            beta. Default is 0.02.
+        shapelets_beta_max : float, optional
+            Upper bound of the uniform prior on the Shapelets scale parameter
+            beta. Default is 0.6.
+        shapelets_amp_sigma : float, optional
+            Multiplicative scale factor applied to the data-derived amplitude
+            to set the standard deviation of the Shapelets amplitude prior.
+            Default is 1.0.
+        use_rayshoot_systematic_error : bool, optional
+            If True, sample a log-uniform ray-shooting systematic error
+            parameter. Default is False.
+        rayshoot_sys_error_min : float, optional
+            Minimum ray-shooting systematic error in arcsec. Default is 0.00005.
+        rayshoot_sys_error_max : float, optional
+            Maximum ray-shooting systematic error in arcsec. Default is 0.005.
+        use_image_pos_offset : bool, optional
+            If True, sample Gaussian image position offsets for time-delay
+            and ray-shooting likelihood terms. Default is False.
+        image_pos_offset_sigma : float, optional
+            Prior standard deviation (arcsec) for image position offsets.
+            Default is 0.01.
+        """
         super().__init__()
         self.lens_image = lens_image
         self.data = jnp.asarray(img)
@@ -270,7 +368,32 @@ class ProbModel(NumpyroModel):
         self.rayshoot_sys_error_min = float(rayshoot_sys_error_min)
         self.rayshoot_sys_error_max = float(rayshoot_sys_error_max)
 
+        # Image position offset parameters (for TD/rayshoot only)
+        self.use_image_pos_offset = bool(use_image_pos_offset)
+        self.image_pos_offset_sigma = float(image_pos_offset_sigma)
+
     def model(self):
+        """
+        Define the NumPyro probabilistic model for strong lens imaging.
+
+        This method specifies all latent variables and their priors using
+        ``numpyro.sample`` statements, constructs the forward model image
+        via ``self.lens_image.model()``, and registers a Gaussian imaging
+        likelihood. The model includes:
+
+        - **Lens mass**: EPL (center, Einstein radius, ellipticity, power-law
+          slope) and external shear.
+        - **Time-delay distance**: ``D_dt`` with a broad uniform prior.
+        - **Lens light**: Sersic profile tied to the lens center.
+        - **Source light**: Sersic profile, optionally augmented with Shapelets.
+        - **Point sources**: Image positions and amplitudes with Gaussian and
+          log-normal priors centered on detected values.
+        - **Optional**: Ray-shooting systematic error (log-uniform) and image
+          position offsets (Gaussian).
+
+        This method takes no parameters and returns no values. It is intended
+        to be called by NumPyro's inference machinery (e.g., NUTS, SVI).
+        """
         img = np.asarray(self.data)
         xgrid = np.asarray(self.xgrid)
         ygrid = np.asarray(self.ygrid)
@@ -278,12 +401,18 @@ class ProbModel(NumpyroModel):
         y0s = self.y0s
         peak_vals = self.peak_vals
 
+        # The weighted center of the image for lens center prior
         p5, p995 = np.percentile(img, [5.0, 99.5])
         clip = np.clip(img, p5, p995)
         w = np.maximum(clip - clip.min(), 0.0)
         W = w.sum() + 1e-12
         cx = float((w * xgrid).sum() / W)
         cy = float((w * ygrid).sum() / W)
+
+
+        # =====================================================================
+        # Lens mass parameters (EPL + Shear)
+        # =====================================================================
 
         lens_center_x = numpyro.sample("lens_center_x", dist.Normal(cx, 0.3))
         lens_center_y = numpyro.sample("lens_center_y", dist.Normal(cy, 0.3))
@@ -309,6 +438,10 @@ class ProbModel(NumpyroModel):
                 ),
             )
 
+        # =====================================================================
+        # Lens light parameters (Sersic)
+        # =====================================================================
+
         amp90 = float(np.percentile(img, 90.0))
         light_amp_L = numpyro.sample(
             "light_amp_L", dist.LogNormal(np.log(max(amp90, 1e-6)), 1.0)
@@ -318,6 +451,10 @@ class ProbModel(NumpyroModel):
         light_e1_L = numpyro.sample("light_e1_L", dist.Uniform(-0.6, 0.6))
         light_e2_L = numpyro.sample("light_e2_L", dist.Uniform(-0.6, 0.6))
 
+        # =====================================================================
+        # Source light parameters (Sersic + optional Shapelets)
+        # =====================================================================
+        
         amp70 = float(np.percentile(img, 70.0))
         light_amp_S = numpyro.sample(
             "light_amp_S", dist.LogNormal(np.log(max(amp70, 3e-6)), 1.2)
@@ -348,6 +485,10 @@ class ProbModel(NumpyroModel):
                 ),
             )
 
+        # =====================================================================
+        # Point source parameters
+        # =====================================================================
+
         x_image = numpyro.sample(
             "x_image",
             dist.Independent(dist.Normal(x0s, 0.2), 1),
@@ -364,6 +505,26 @@ class ProbModel(NumpyroModel):
             ),
         )
 
+        # Image position offsets for TD/rayshoot likelihood terms only
+        # These offsets account for astrometric errors between imaging and cosmography
+        if self.use_image_pos_offset:
+            nps = x0s.shape[0]
+            numpyro.sample(
+                "offset_x_image",
+                dist.Independent(
+                    dist.Normal(jnp.zeros(nps), self.image_pos_offset_sigma), 1
+                ),
+            )
+            numpyro.sample(
+                "offset_y_image",
+                dist.Independent(
+                    dist.Normal(jnp.zeros(nps), self.image_pos_offset_sigma), 1
+                ),
+            )
+
+        # =====================================================================
+        # Build kwargs for lens_image.model()
+        # =====================================================================
         kwargs_lens = [
             dict(
                 theta_E=theta_E,
@@ -416,7 +577,7 @@ class ProbModel(NumpyroModel):
             kwargs_lens_light=kwargs_lens_light,
             kwargs_point_source=kwargs_point,
         )
-
+        # Likelihood term for the image data (afterwards we add TD/rayshoot terms)
         numpyro.sample(
             "obs",
             dist.Independent(dist.Normal(model_img, self.noise_map), 2),
@@ -424,6 +585,32 @@ class ProbModel(NumpyroModel):
         )
 
     def params2kwargs(self, params: dict):
+        """
+        Convert a flat parameter dictionary to Herculens keyword argument dicts.
+
+        Maps named parameters (e.g., ``"lens_theta_E"``, ``"light_amp_L"``)
+        into the nested keyword argument structure expected by
+        ``LensImage.model()``. Includes Shapelets parameters if
+        ``use_source_shapelets`` is True.
+
+        Parameters
+        ----------
+        params : dict
+            Flat dictionary mapping parameter names to their values. Expected
+            keys include lens mass parameters (``lens_theta_E``, ``lens_e1``,
+            etc.), lens light (``light_amp_L``, ``light_Re_L``, etc.), source
+            light (``light_amp_S``, ``light_Re_S``, etc.), point sources
+            (``x_image``, ``y_image``, ``ps_amp``), and optionally Shapelets
+            (``shapelets_amp_S``, ``shapelets_beta_S``).
+
+        Returns
+        -------
+        dict
+            Dictionary with keys ``"kwargs_lens"``, ``"kwargs_source"``,
+            ``"kwargs_lens_light"``, and ``"kwargs_point_source"``, each
+            containing lists of parameter dicts suitable for
+            ``LensImage.model()``.
+        """
         kwargs_lens = [
             dict(
                 theta_E=params["lens_theta_E"],
@@ -488,11 +675,50 @@ class ProbModel(NumpyroModel):
         )
 
     def model_image_from_params(self, params: dict):
+        """
+        Generate a forward-model image from a flat parameter dictionary.
+
+        Converts the parameter dictionary to Herculens keyword arguments via
+        ``params2kwargs``, then evaluates the full lens model (mass deflection,
+        source and lens light rendering, point source placement, and PSF
+        convolution).
+
+        Parameters
+        ----------
+        params : dict
+            Flat dictionary of model parameters (see ``params2kwargs`` for
+            expected keys).
+
+        Returns
+        -------
+        jnp.ndarray
+            2D model image array with the same shape as the observed data.
+        """
         kwargs = self.params2kwargs(params)
         model_img = self.lens_image.model(**kwargs)
         return jnp.asarray(model_img)
 
     def reduced_chi2(self, params: dict, n_params: int | None = None) -> float:
+        """
+        Compute the reduced chi-squared statistic for given parameters.
+
+        Evaluates the forward model and computes
+        ``chi2_red = sum((data - model)^2 / noise^2) / dof``, where
+        ``dof = n_pixels - n_params``.
+
+        Parameters
+        ----------
+        params : dict
+            Flat dictionary of model parameters.
+        n_params : int or None, optional
+            Number of free parameters for degrees-of-freedom calculation.
+            If None, defaults to ``len(params)``.
+
+        Returns
+        -------
+        float
+            Reduced chi-squared value.
+        """
         model_img = self.model_image_from_params(params)
         resid = (self.data - model_img) / self.noise_map
         chi2 = jnp.sum(resid**2)
@@ -514,10 +740,48 @@ class ProbModelCorrField(NumpyroModel):
     arbitrary source morphologies while maintaining physical regularization.
 
     The model includes:
+
     - EPL + Shear mass model
     - Sersic lens light
     - Correlated Field (pixelated) source light
     - Point sources at image positions
+
+    Attributes
+    ----------
+    lens_image : LensImage
+        Herculens LensImage object with PixelatedLight source model.
+    data : jnp.ndarray
+        Observed image data as a JAX array.
+    noise_map : jnp.ndarray
+        Per-pixel noise standard deviation as a JAX array.
+    xgrid : jnp.ndarray
+        X-coordinate grid of the image pixels.
+    ygrid : jnp.ndarray
+        Y-coordinate grid of the image pixels.
+    x0s : jnp.ndarray
+        Initial x-positions of detected point source images.
+    y0s : jnp.ndarray
+        Initial y-positions of detected point source images.
+    peak_vals : jnp.ndarray
+        Initial peak amplitudes of detected point source images.
+    source_field : CorrelatedField
+        The CorrelatedField instance managing the GP prior on source pixels.
+    num_pixels : int
+        Number of pixels per side for the pixelated source grid.
+    use_rayshoot_systematic_error : bool
+        Whether to include a free ray-shooting systematic error parameter.
+    rayshoot_sys_error_min : float
+        Lower bound (arcsec) for the ray-shooting systematic error.
+    rayshoot_sys_error_max : float
+        Upper bound (arcsec) for the ray-shooting systematic error.
+    use_image_pos_offset : bool
+        Whether to include free image position offsets for time-delay terms.
+    image_pos_offset_sigma : float
+        Prior sigma (arcsec) for image position offsets.
+    use_corr_fields : bool
+        Always True for this class, used for identification.
+    use_source_shapelets : bool
+        Always False for this class, used for identification.
     """
 
     def __init__(
@@ -535,6 +799,8 @@ class ProbModelCorrField(NumpyroModel):
         use_rayshoot_systematic_error: bool = False,
         rayshoot_sys_error_min: float = 0.00005,
         rayshoot_sys_error_max: float = 0.005,
+        use_image_pos_offset: bool = False,
+        image_pos_offset_sigma: float = 0.01,
     ):
         """
         Initialize the Correlated Field probabilistic model.
@@ -542,23 +808,42 @@ class ProbModelCorrField(NumpyroModel):
         Parameters
         ----------
         lens_image : LensImage
-            Herculens LensImage object with PixelatedLight source.
+            Herculens LensImage object configured with a PixelatedLight
+            source model and optional source arc mask.
         img : np.ndarray
-            Observed image data.
+            2D observed image array.
         noise_map : np.ndarray
-            Per-pixel noise standard deviation.
-        xgrid, ygrid : np.ndarray
-            Coordinate grids.
-        x0s, y0s : np.ndarray
-            Initial point source positions (detected or truth).
+            2D per-pixel noise standard deviation array, same shape as ``img``.
+        xgrid : np.ndarray
+            2D array of x-coordinates for each pixel in the image plane.
+        ygrid : np.ndarray
+            2D array of y-coordinates for each pixel in the image plane.
+        x0s : np.ndarray
+            1D array of initial x-positions of detected point source images.
+        y0s : np.ndarray
+            1D array of initial y-positions of detected point source images.
         peak_vals : np.ndarray
-            Initial point source amplitudes.
+            1D array of initial peak amplitudes of detected point source images.
         source_field : CorrelatedField
-            The CorrelatedField instance for source sampling.
-        use_rayshoot_systematic_error : bool
-            Include ray shooting systematic error as free parameter.
-        rayshoot_sys_error_min, rayshoot_sys_error_max : float
-            Bounds for ray shooting systematic error (arcsec).
+            The CorrelatedField instance that manages the Gaussian Process
+            prior on the pixelated source grid and provides
+            ``numpyro_sample_pixels()`` for sampling.
+        num_pixels : int, optional
+            Number of pixels per side for the source grid. Must match the
+            value used when creating the source model. Default is 80.
+        use_rayshoot_systematic_error : bool, optional
+            If True, sample a log-uniform ray-shooting systematic error
+            parameter. Default is False.
+        rayshoot_sys_error_min : float, optional
+            Minimum ray-shooting systematic error in arcsec. Default is 0.00005.
+        rayshoot_sys_error_max : float, optional
+            Maximum ray-shooting systematic error in arcsec. Default is 0.005.
+        use_image_pos_offset : bool, optional
+            If True, sample Gaussian image position offsets for time-delay
+            and ray-shooting likelihood terms. Default is False.
+        image_pos_offset_sigma : float, optional
+            Prior standard deviation (arcsec) for image position offsets.
+            Default is 0.01.
         """
         super().__init__()
         self.lens_image = lens_image
@@ -574,6 +859,8 @@ class ProbModelCorrField(NumpyroModel):
         self.use_rayshoot_systematic_error = bool(use_rayshoot_systematic_error)
         self.rayshoot_sys_error_min = float(rayshoot_sys_error_min)
         self.rayshoot_sys_error_max = float(rayshoot_sys_error_max)
+        self.use_image_pos_offset = bool(use_image_pos_offset)
+        self.image_pos_offset_sigma = float(image_pos_offset_sigma)
 
         # Flag for identification
         self.use_corr_fields = True
@@ -581,21 +868,52 @@ class ProbModelCorrField(NumpyroModel):
 
         # Number of "physical" parameters for chi2_red computation
         # This excludes the thousands of source pixel parameters
-        # Approximate count: lens (10) + lens_light (5) + point_source (8) + D_dt (1) + src_center (2) + optional (2)
+        # We estimate this using a very simple model count:
         self._num_physical_params = 28
 
     @property
     def num_parameters_for_chi2(self) -> int:
-        """Number of parameters to use for reduced chi2 calculation.
+        """
+        Return the number of parameters used for reduced chi-squared calculation.
 
-        For Correlated Fields, this returns the number of 'physical' model
-        parameters (lens, light, point source), excluding the source pixel
-        parameters which would make chi2_red meaningless.
+        For Correlated Fields, this returns only the number of 'physical'
+        model parameters (lens mass, lens light, point sources), excluding
+        the thousands of source pixel parameters which would make the
+        reduced chi-squared statistic meaningless.
+
+        Returns
+        -------
+        int
+            Number of physical model parameters (default is 28).
         """
         return self._num_physical_params
 
     def model(self):
-        """NumPyro model specification with Correlated Field source."""
+        """
+        Define the NumPyro probabilistic model with a Correlated Field source.
+
+        This method specifies all latent variables and their priors using
+        ``numpyro.sample`` statements, constructs the forward model image
+        via ``self.lens_image.model()``, and registers a Gaussian imaging
+        likelihood. The model includes:
+
+        - **Lens mass**: EPL (center, Einstein radius, ellipticity, power-law
+          slope) and external shear.
+        - **Time-delay distance**: ``D_dt`` with a broad uniform prior.
+        - **Lens light**: Sersic profile tied to the lens center.
+        - **Source light**: Pixelated source sampled from the Correlated Field
+          GP prior via ``self.source_field.numpyro_sample_pixels()``.
+        - **Point sources**: Image positions and amplitudes with Gaussian and
+          log-normal priors centered on detected values.
+        - **Optional**: Ray-shooting systematic error (log-uniform) and image
+          position offsets (Gaussian).
+
+        Unlike ``ProbModel.model()``, there are no explicit source center
+        parameters; the source is defined on a pixelated grid.
+
+        This method takes no parameters and returns no values. It is intended
+        to be called by NumPyro's inference machinery (e.g., NUTS, SVI).
+        """
         img = np.asarray(self.data)
         xgrid = np.asarray(self.xgrid)
         ygrid = np.asarray(self.ygrid)
@@ -675,6 +993,22 @@ class ProbModelCorrField(NumpyroModel):
             ),
         )
 
+        # Image position offsets for TD/rayshoot likelihood terms only
+        if self.use_image_pos_offset:
+            nps = x0s.shape[0]
+            numpyro.sample(
+                "offset_x_image",
+                dist.Independent(
+                    dist.Normal(jnp.zeros(nps), self.image_pos_offset_sigma), 1
+                ),
+            )
+            numpyro.sample(
+                "offset_y_image",
+                dist.Independent(
+                    dist.Normal(jnp.zeros(nps), self.image_pos_offset_sigma), 1
+                ),
+            )
+
         # =====================================================================
         # Build kwargs for lens_image.model()
         # =====================================================================
@@ -717,6 +1051,7 @@ class ProbModelCorrField(NumpyroModel):
             kwargs_point_source=kwargs_point,
         )
 
+        # Likelihood term for the image data
         numpyro.sample(
             "obs",
             dist.Independent(dist.Normal(model_img, self.noise_map), 2),
@@ -724,7 +1059,33 @@ class ProbModelCorrField(NumpyroModel):
         )
 
     def params2kwargs(self, params: dict):
-        """Convert flat parameter dict to kwargs for lens_image.model()."""
+        """
+        Convert a flat parameter dictionary to Herculens keyword argument dicts.
+
+        Maps named parameters into the nested keyword argument structure
+        expected by ``LensImage.model()``. For the source, evaluates the
+        Correlated Field model to produce pixelated source intensities from
+        the GP hyperparameters stored in ``params``.
+
+        Parameters
+        ----------
+        params : dict
+            Flat dictionary mapping parameter names to their values. Expected
+            keys include lens mass parameters (``lens_theta_E``, ``lens_e1``,
+            etc.), lens light (``light_amp_L``, ``light_Re_L``, etc.), point
+            sources (``x_image``, ``y_image``, ``ps_amp``), and all
+            Correlated Field GP hyperparameters (automatically managed by
+            ``self.source_field``).
+
+        Returns
+        -------
+        dict
+            Dictionary with keys ``"kwargs_lens"``, ``"kwargs_source"``,
+            ``"kwargs_lens_light"``, and ``"kwargs_point_source"``, each
+            containing lists of parameter dicts suitable for
+            ``LensImage.model()``. The source kwargs contain the reconstructed
+            pixel values under the ``"pixels"`` key.
+        """
         kwargs_lens = [
             dict(
                 theta_E=params["lens_theta_E"],
@@ -783,17 +1144,56 @@ class ProbModelCorrField(NumpyroModel):
         )
 
     def model_image_from_params(self, params: dict):
-        """Generate model image from parameter dict."""
+        """
+        Generate a forward-model image from a flat parameter dictionary.
+
+        Converts the parameter dictionary to Herculens keyword arguments via
+        ``params2kwargs`` (which evaluates the Correlated Field to produce
+        source pixels), then evaluates the full lens model including mass
+        deflection, pixelated source rendering, lens light, point sources,
+        and PSF convolution.
+
+        Parameters
+        ----------
+        params : dict
+            Flat dictionary of model parameters including lens, light, point
+            source, and Correlated Field GP hyperparameters (see
+            ``params2kwargs`` for expected keys).
+
+        Returns
+        -------
+        jnp.ndarray
+            2D model image array with the same shape as the observed data.
+        """
         kwargs = self.params2kwargs(params)
         model_img = self.lens_image.model(**kwargs)
         return jnp.asarray(model_img)
 
     def reduced_chi2(self, params: dict, n_params: int | None = None) -> float:
-        """Compute reduced chi-squared for the model.
+        """
+        Compute the reduced chi-squared statistic for given parameters.
 
-        For Correlated Fields, uses only the physical model parameters
-        (lens, light, point source) for DOF calculation, not the thousands
-        of source pixel parameters.
+        Evaluates the forward model (including Correlated Field source
+        reconstruction) and computes
+        ``chi2_red = sum((data - model)^2 / noise^2) / dof``.
+
+        For Correlated Fields, the degrees of freedom use only the physical
+        model parameters (lens mass, lens light, point sources) by default,
+        excluding the thousands of source pixel parameters which would make
+        the statistic meaningless.
+
+        Parameters
+        ----------
+        params : dict
+            Flat dictionary of model parameters.
+        n_params : int or None, optional
+            Number of free parameters for degrees-of-freedom calculation.
+            If None, defaults to ``self._num_physical_params`` (typically 28).
+
+        Returns
+        -------
+        float
+            Reduced chi-squared value.
         """
         model_img = self.model_image_from_params(params)
         resid = (self.data - model_img) / self.noise_map
@@ -809,17 +1209,23 @@ class ProbModelCorrField(NumpyroModel):
 
     def get_source_pixels_from_params(self, params: dict) -> jnp.ndarray:
         """
-        Extract source pixel values from parameter dict.
+        Extract reconstructed source pixel values from a parameter dictionary.
+
+        Evaluates the Correlated Field model using the GP hyperparameters
+        in ``params`` to produce the pixelated source intensity map. All
+        parameter values are converted to JAX arrays before evaluation.
 
         Parameters
         ----------
-        params : Dict
-            Parameter dictionary (e.g., from multistart optimization).
+        params : dict
+            Flat parameter dictionary containing the Correlated Field GP
+            hyperparameters (e.g., from multistart optimization results).
 
         Returns
         -------
         jnp.ndarray
-            Source pixel values, shape (num_pixels, num_pixels).
+            2D source pixel intensity array with shape
+            ``(num_pixels, num_pixels)``.
         """
         params_jax = {
             k: jnp.asarray(v) if isinstance(v, (list, np.ndarray)) else v
