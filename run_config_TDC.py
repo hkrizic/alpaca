@@ -128,7 +128,13 @@ PS_FALLBACK_TO_TRUTH = True  # use truth positions if detection fails
 # =============================================================================
 # NOISE BOOSTING AROUND POINT SOURCES
 # =============================================================================
-NOISE_BOOST_F_MAX = 5.0    # max multiplicative factor at PS center (1.0 = no boost)
+# Noise is boosted in a circle around each point source to reduce overfitting
+# of PSF wings. Factor decays linearly from f_max at center to 1.0 at radius.
+NOISE_BOOST_F_MAX = 5.0        # max multiplicative factor at PS center (1.0 = no boost)
+NOISE_BOOST_RADIUS = None      # radius in arcsec (None = auto from image separations)
+NOISE_BOOST_FRAC_MIN_SEP = 0.4 # fraction of min PS separation for auto-radius
+NOISE_BOOST_MIN_NPIX = 2.5     # minimum radius in pixels (clamps auto-radius)
+NOISE_BOOST_MAX_NPIX = 6.0     # maximum radius in pixels (clamps auto-radius)
 
 
 # =============================================================================
@@ -194,7 +200,13 @@ def load_config() -> PipelineConfig:
         ),
 
         boost_noise_around_ps=True,
-        boost_noise_kwargs={"f_max": NOISE_BOOST_F_MAX},
+        boost_noise_kwargs={
+            "f_max": NOISE_BOOST_F_MAX,
+            "radius": NOISE_BOOST_RADIUS,
+            "frac_min_sep": NOISE_BOOST_FRAC_MIN_SEP,
+            "min_npix": NOISE_BOOST_MIN_NPIX,
+            "max_npix": NOISE_BOOST_MAX_NPIX,
+        },
 
         # Point source detection
         ps_min_sep=PS_MIN_SEP,
