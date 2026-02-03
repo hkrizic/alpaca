@@ -25,7 +25,7 @@ import numpy as np
 
 from alpaca.pipeline import run_pipeline
 from alpaca.utils.bic import compute_bic_from_results
-from run_config_TDC import load_config, load_tdlmc_data
+from run_config_TDC import load_config, load_measured_time_delays, load_tdlmc_data
 
 
 def main():
@@ -71,18 +71,28 @@ def main():
     img, psf_kernel, noise_map = load_tdlmc_data()
 
     # =============================================================================
-    # 4. RUN THE PIPELINE
+    # 4. LOAD TIME DELAYS (from TDC good-team file)
+    # =============================================================================
+    print("\nLoading time delays from TDC files...")
+    image_positions, measured_delays, delay_errors, labels = load_measured_time_delays()
+
+    # =============================================================================
+    # 5. RUN THE PIPELINE
     # =============================================================================
     results = run_pipeline(
         config=config,
         img=img,
         psf_kernel=psf_kernel,
         noise_map=noise_map,
+        image_positions=image_positions,
+        measured_delays=measured_delays,
+        delay_errors=delay_errors,
+        time_delay_labels=labels,
         verbose=True,
     )
 
     # =============================================================================
-    # 5. EXPLORE RESULTS
+    # 6. EXPLORE RESULTS
     # =============================================================================
     output_dir = results["output_dirs"]["root"]
     print(f"\nResults saved to: {output_dir}")

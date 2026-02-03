@@ -375,3 +375,86 @@ def load_tdlmc_time_delays(x0s, y0s):
         BASE_DIR, RUNG, CODE_ID, SEED, x0s, y0s,
         verbose=True, fallback_to_truth=PS_FALLBACK_TO_TRUTH,
     )
+
+
+def load_measured_time_delays():
+    """
+    Load measured time delays and reference positions from TDC files.
+
+    Reads the good-team file for measured delays/errors and the open-box
+    file for truth image positions. Returns data in the format expected
+    by ``run_pipeline()``.
+
+    The truth positions are used as approximate reference positions for
+    labeling the auto-detected images. The pipeline will auto-detect the
+    actual positions and match them to these references.
+
+    Returns
+    -------
+    image_positions : tuple of (np.ndarray, np.ndarray)
+        Truth ``(x_array, y_array)`` positions in arcsec, used to label
+        auto-detected images.
+    measured_delays : np.ndarray
+        Time delays relative to image A (the first/reference image), in days.
+        Length is ``n_images - 1``.
+    delay_errors : np.ndarray
+        1-sigma errors on the measured delays, in days.
+    labels : list of str
+        Image labels (e.g. ``["A", "B", "C", "D"]``).
+
+    Raises
+    ------
+    FileNotFoundError
+        If the good-team or open-box info file is missing.
+    ValueError
+        If time delays cannot be parsed from the good-team file.
+    """
+    import numpy as np
+
+    from tdlmc_helper import parse_good_team_lens_info_file, parse_lens_info_file
+
+    # Paths to TDC info files
+    good_team_path = os.path.join(
+        BASE_DIR,
+        f"TDC/rung{RUNG}/code{CODE_ID}/f160w-seed{SEED}/lens_info_for_Good_team.txt",
+    )
+    open_box_path = os.path.join(
+        BASE_DIR,
+        f"TDC/rung{RUNG}_open_box/code{CODE_ID}/f160w-seed{SEED}/lens_all_info.txt",
+    )
+
+    if not os.path.exists(good_team_path):
+        raise FileNotFoundError(f"Missing measured delays file: {good_team_path}")
+    if not os.path.exists(open_box_path):
+        raise FileNotFoundError(f"Missing open-box file: {open_box_path}")
+
+    # Read measured delays from good-team file
+    good_info = parse_good_team_lens_info_file(good_team_path)
+    delays_bcd = good_info["time_delays_BCD_minus_A"]["values"]
+    errors_bcd = good_info["time_delays_BCD_minus_A"]["errors"]
+
+    if delays_bcd is None or errors_bcd is None:
+        raise ValueError(f"Time delays not found in {good_team_path}")
+
+    delays_bcd = np.asarray(delays_bcd, dtype=float)
+    errors_bcd = np.asarray(errors_bcd, dtype=float)
+
+    # Read truth positions from open-box file
+    truth_info = parse_lens_info_file(open_box_path)
+    x_truth = np.asarray(truth_info["AGN_light"]["image_plane"]["x"], dtype=float)
+    y_truth = np.asarray(truth_info["AGN_light"]["image_plane"]["y"], dtype=float)
+
+    n_images = len(x_truth)
+    labels = ["A", "B", "C", "D"][:n_images]
+
+    # delays_bcd are B-A, C-A, D-A (relative to A)
+    # We need delays for images 1..n-1 relative to image 0
+    measured_delays = delays_bcd[: n_images - 1]
+    delay_errors = errors_bcd[: n_images - 1]
+
+    print("Loaded time delays from TDC files:")
+    print("  Reference image: A")
+    for i, label in enumerate(labels[1:]):
+        print(f"  dt({label}-A) = {measured_delays[i]:.2f} +/- {delay_errors[i]:.2f} days")
+
+    return (x_truth, y_truth), measured_delays, delay_errors, labels
