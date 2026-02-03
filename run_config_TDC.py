@@ -30,22 +30,22 @@ from alpaca.config import (
 BASE_DIR = "."
 RUNG = 1
 CODE_ID = 1       # or read from env: int(os.environ.get("LENS_CODE", 1))
-SEED = 101        # or read from env: int(os.environ.get("LENS_SEED", 120))
+SEED = 120        # or read from env: int(os.environ.get("LENS_SEED", 120))
 
 # =============================================================================
 # SOURCE LIGHT MODEL  (choose ONE)
 # =============================================================================
 # Option 1: Shapelets (analytic basis functions)
-USE_SHAPELETS = False
-SHAPELETS_N_MAX = 6
+USE_SHAPELETS = True
+SHAPELETS_N_MAX = 8
 
 # Option 2: Correlated Fields (pixelated source with GP prior)
-USE_CORR_FIELDS = True  # set True to use instead of Shapelets
+USE_CORR_FIELDS = False  # set True to use instead of Shapelets
 
 # =============================================================================
 # CORRELATED FIELD HYPERPARAMETERS  (only used if USE_CORR_FIELDS = True)
 # =============================================================================
-CORR_FIELD_NUM_PIXELS = 160
+CORR_FIELD_NUM_PIXELS = 80
 CORR_FIELD_LOGLOGAVGSLOPE = (-6.0, 0.5)   # smoothness prior (smaller = smoother)
 CORR_FIELD_FLUCTUATIONS = (1.0, 0.5)       # fluctuation amplitude prior
 CORR_FIELD_MEAN_INTENSITY = None            # None = auto-estimate from data
@@ -84,8 +84,8 @@ RAYSHOOT_SYS_ERROR_MIN = 0.00005  # arcsec (0.05 mas)
 RAYSHOOT_SYS_ERROR_MAX = 0.005    # arcsec (5 mas)
 
 # Image position offset for TD/rayshoot terms (accounts for astrometric errors)
-USE_IMAGE_POS_OFFSET = False
-IMAGE_POS_OFFSET_SIGMA = 0.01    # arcsec, prior sigma for offsets
+USE_IMAGE_POS_OFFSET = True
+IMAGE_POS_OFFSET_SIGMA = 0.08    # arcsec, prior sigma for offsets
 
 # =============================================================================
 # GRADIENT DESCENT / MULTI-START
@@ -122,7 +122,7 @@ LENS_GAMMA_PRIOR_SIGMA = 0.2     # only used when type is "normal"
 # =============================================================================
 # POINT SOURCE DETECTION
 # =============================================================================
-PS_MIN_SEP = 0.08          # minimum separation between images (arcsec)
+PS_MIN_SEP = 2 * 0.08          # minimum separation between images (arcsec)
 PS_FALLBACK_TO_TRUTH = True  # use truth positions if detection fails
 
 
