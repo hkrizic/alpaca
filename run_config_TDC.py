@@ -125,6 +125,11 @@ LENS_GAMMA_PRIOR_SIGMA = 0.2     # only used when type is "normal"
 PS_MIN_SEP = 2 * 0.08          # minimum separation between images (arcsec)
 PS_FALLBACK_TO_TRUTH = True  # use truth positions if detection fails
 
+# =============================================================================
+# NOISE BOOSTING AROUND POINT SOURCES
+# =============================================================================
+NOISE_BOOST_F_MAX = 5.0    # max multiplicative factor at PS center (1.0 = no boost)
+
 
 # =============================================================================
 # BUILD PIPELINE CONFIG  -- nothing below here needs editing
@@ -189,6 +194,7 @@ def load_config() -> PipelineConfig:
         ),
 
         boost_noise_around_ps=True,
+        boost_noise_kwargs={"f_max": NOISE_BOOST_F_MAX},
 
         # Point source detection
         ps_min_sep=PS_MIN_SEP,
