@@ -14,13 +14,11 @@ plot_corner_posterior
     Generic corner plot from posterior samples.
 """
 
-import os
 import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-from getdist import MCSamples, plots
+from getdist import MCSamples
 
 # Optional imports for corner plotting backends
 try:

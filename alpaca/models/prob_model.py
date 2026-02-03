@@ -1,6 +1,6 @@
 """
 Probabilistic lens models and lens image construction for strong lens modeling.
-Includes Correlated Field source model support. 
+Includes Correlated Field source model support.
 
 author: hkrizic
 """
@@ -206,7 +206,7 @@ def create_corr_field(
             "CorrelatedField requires herculens with correlated_field support. "
             "Please update herculens."
         )
-    
+
     # Estimate mean intensity from data if not specified
     if mean_intensity is None:
         mean_intensity = float(np.percentile(img, 70))
@@ -222,7 +222,7 @@ def create_corr_field(
         prior_fluctuations=fluctuations,
         prior_flexibility=flexibility, # prior on flexibility, which controls variations on slope
         prior_asperity=asperity, # prior on asperity, which controls roughness
-        cropped_border_size=cropped_border_size, 
+        cropped_border_size=cropped_border_size,
         exponentiate=exponentiate, # ensure positive intensities
     )
 
@@ -454,7 +454,7 @@ class ProbModel(NumpyroModel):
         # =====================================================================
         # Source light parameters (Sersic + optional Shapelets)
         # =====================================================================
-        
+
         amp70 = float(np.percentile(img, 70.0))
         light_amp_S = numpyro.sample(
             "light_amp_S", dist.LogNormal(np.log(max(amp70, 3e-6)), 1.2)

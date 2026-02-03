@@ -19,7 +19,6 @@ plot_nuts_diagnostics
 """
 
 import os
-from collections.abc import Sequence
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt

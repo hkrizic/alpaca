@@ -14,11 +14,9 @@ plot_ray_tracing_check
     Ray-trace image positions to source plane.
 """
 
-import os
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 
 def plot_model_summary_custom(

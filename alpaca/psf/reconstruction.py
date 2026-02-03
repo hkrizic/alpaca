@@ -20,7 +20,6 @@ from alpaca.psf.isolation import (
 )
 from alpaca.psf.utils import (
     _augment_rotations,
-    _center_crop_or_pad,
     _ensure_dir,
     _find_nonfinite_fields,
     _save_fits,

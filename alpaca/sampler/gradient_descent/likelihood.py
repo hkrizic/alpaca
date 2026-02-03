@@ -15,7 +15,6 @@ from herculens.Inference.loss import Loss
 
 from alpaca.sampler.utils import _prepare_time_delay_inputs
 
-
 C_KM_S = 299792.458  # speed of light in km/s
 
 

@@ -43,7 +43,7 @@ def compute_bic(posterior: dict, n_pixels: int, n_params: int = None) -> float:
         raise ValueError("Posterior must contain 'log_likelihood' field for BIC computation.")
 
     log_likelihood = np.asarray(log_likelihood)
-    log_L_max = np.max(log_likelihood) # Take best log-likelihood value for BIC computation 
+    log_L_max = np.max(log_likelihood) # Take best log-likelihood value for BIC computation
 
     if n_params is None:
         param_names = posterior.get("param_names", [])

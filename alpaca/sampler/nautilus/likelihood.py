@@ -135,7 +135,7 @@ def make_paramdict_to_kwargs(best_flat: dict, nps: int):
             kwargs_point = None
 
         # ---- Image position offsets (reconstruct arrays from individual params) ----
-        if nps and f"offset_x_image_0" in P:
+        if nps and "offset_x_image_0" in P:
             offset_x = np.array([P[f"offset_x_image_{i}"] for i in range(nps)])
             offset_y = np.array([P[f"offset_y_image_{i}"] for i in range(nps)])
             P["offset_x_image"] = offset_x
@@ -271,7 +271,7 @@ def make_paramdict_to_kwargs_jax(best_flat: dict, nps: int):
 
         # ---- Image position offsets (reconstruct arrays from individual params) ----
         # Check if individual offset params exist (from Nautilus prior)
-        if nps and f"offset_x_image_0" in P:
+        if nps and "offset_x_image_0" in P:
             offset_x_list = [P[f"offset_x_image_{i}"] for i in range(nps)]
             offset_y_list = [P[f"offset_y_image_{i}"] for i in range(nps)]
             P["offset_x_image"] = jnp.stack(offset_x_list)

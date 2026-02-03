@@ -307,7 +307,7 @@ def _run_optimizations_chunked(
             # Clear caches before each attempt
             jax.clear_caches()
             gc.collect()
-            
+
             if is_sequential:
                 if verbose:
                     print(f"[{phase_name}] Running sequential (chunk_size=1)...")
@@ -528,7 +528,7 @@ def run_gradient_descent(
                 },
                 ...
             ],
-        }   
+        }
     """
     from alpaca.sampler.gradient_descent.likelihood import build_likelihood
 

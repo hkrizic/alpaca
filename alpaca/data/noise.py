@@ -142,7 +142,7 @@ def boost_noise_around_point_sources(
 
     if radius is None:
         # auto-compute radius based on min separation between point-source images
-        radius = auto_noise_boost_radius( 
+        radius = auto_noise_boost_radius(
             xgrid=xgrid,
             x_images=x_images,
             y_images=y_images,

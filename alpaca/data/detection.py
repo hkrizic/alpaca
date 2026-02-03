@@ -96,7 +96,7 @@ def detect_ps_images_centered(
     mask_lens = dist_ang < lens_mask_radius # mask with 1 in central lens region and 0 elsewhere
 
     # Find all local maxima, take only those as cand which are outside the central lens region and above threshold min_peak_frac * value of the brightest peak
-    local_max = maximum_filter(img, size=local_win, mode="nearest") 
+    local_max = maximum_filter(img, size=local_win, mode="nearest")
     is_local_max = img == local_max # boolean mask of local maxima
     peak_max = float(img[~mask_lens].max())
     thr = min_peak_frac * peak_max

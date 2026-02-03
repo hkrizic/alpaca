@@ -484,7 +484,7 @@ def run_pipeline(
                     title="Best-fit Model (Multi-start)",
                     dpi=config.plotting_config.dpi,
                 )
-                
+
         # Ray tracing check: verify 4 images converge to same source position
         if config.plotting_config.save_plots:
             try:

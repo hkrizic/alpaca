@@ -66,7 +66,7 @@ def make_pixel_grids(
     # High-res PS grid for subpixel point-source positions
     ps_grid_npix = ps_oversample * npix + 1 # for ps_oversample = 2: 2n+1 PS grid points for n image grid points
     ps_grid_pix_scl = (pix_scl * npix) / ps_grid_npix # adjust pixel scale so that PS grid covers same size as image grid (scale * ratio of npix)
-    ps_grid_half_size = ps_grid_npix * ps_grid_pix_scl / 2.0 
+    ps_grid_half_size = ps_grid_npix * ps_grid_pix_scl / 2.0
     ps_grid_ra0 = ps_grid_dec0 = -ps_grid_half_size + ps_grid_pix_scl / 2.0
     ps_grid = PixelGrid(
         nx=ps_grid_npix,

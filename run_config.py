@@ -63,7 +63,7 @@ SAMPLER = "nuts"   # "nuts", "nautilus", or "default"
 # =============================================================================
 # PIPELINE PHASE TOGGLES
 # =============================================================================
-RUN_PSF_RECONSTRUCTION = False
+RUN_PSF_RECONSTRUCTION = False # set False if PSF is known
 RUN_MULTISTART = True
 RUN_SAMPLING = True
 
