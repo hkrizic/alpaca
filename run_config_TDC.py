@@ -28,7 +28,7 @@ from alpaca.config import (
 # DATA IDENTIFICATION  (TDLMC-specific)
 # =============================================================================
 BASE_DIR = "."
-RUNG = 1
+RUNG = 2
 CODE_ID = 1       # or read from env: int(os.environ.get("LENS_CODE", 1))
 SEED = 120        # or read from env: int(os.environ.get("LENS_SEED", 120))
 
