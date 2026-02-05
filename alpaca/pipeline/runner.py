@@ -29,13 +29,13 @@ from alpaca.config import (
 
 # Data imports
 from alpaca.data.setup import setup_lens
-from alpaca.plotting.diagnostics import (
-    plot_multistart_summary,
-    plot_psf_comparison,
-)
+from alpaca.plotting.diagnostics import plot_psf_comparison
 
 # Plotting imports
-from alpaca.plotting.model_plots import plot_model_summary_custom, plot_ray_tracing_check
+from alpaca.plotting.model_plots import (
+    plot_model_summary_custom,
+    plot_ray_tracing_check,
+)
 
 # PSF imports
 from alpaca.psf.iterations import run_psf_reconstruction_iterations as run_psf_iterations
@@ -436,21 +436,18 @@ def run_pipeline(
         t_ms = time.perf_counter() - t_ms_start
         if verbose:
             best_chi2 = multistart_summary["best_chi2_red"]
-            best_run = multistart_summary["best_run"]
-            n_total = multistart_summary["total_optimizations"]
             best_phase = multistart_summary.get("best_from_phase", "N/A")
             print(f"Multi-start completed in {t_ms:.2f}s")
-            print(f"Best chi2_red = {best_chi2:.4f} "
-                  f"(run {best_run}/{n_total}, {best_phase} phase)")
+            print(f"Best chi2_red = {best_chi2:.4f} ({best_phase} phase)")
 
-        # Plot multi-start summary
-        if config.plotting_config.save_plots:
-            plot_multistart_summary(
-                multistart_summary,
-                save_path=os.path.join(dirs["multistart_plots"],
-                                       f"multistart_summary.{config.plotting_config.plot_format}"),
-                dpi=config.plotting_config.dpi,
-            )
+        # Save source pixels for correlated fields (required for later analysis
+        # since the CF basis cannot be recreated)
+        if config.use_corr_fields:
+            source_pixels = prob_model.get_source_pixels_from_params(best_params)
+            source_pixels_path = os.path.join(dirs["multistart"], "best_source_pixels.fits")
+            _save_fits(source_pixels_path, np.asarray(source_pixels))
+            if verbose:
+                print(f"Saved source pixels to {source_pixels_path}")
 
         # Plot model at best-fit
         if config.plotting_config.save_plots and config.plotting_config.plot_model_summary:
@@ -461,10 +458,14 @@ def run_pipeline(
             if _HAS_PLOTTER:
                 plotter = Plotter(flux_vmin=1e-3, flux_vmax=10, res_vmax=4)
                 plotter.set_data(img)
+                # For correlated fields, don't pass kwargs_grid_source so herculens
+                # uses the adaptive source grid with the configured num_pixels.
+                # For other models, use pixel_scale_factor=1 to match image resolution.
+                kwargs_grid_src = None if config.use_corr_fields else dict(pixel_scale_factor=1)
                 fig = plotter.model_summary(
                     lens_image, kwargs,
                     show_source=True,
-                    kwargs_grid_source=dict(pixel_scale_factor=1),
+                    kwargs_grid_source=kwargs_grid_src,
                 )
                 fig.suptitle("Best-fit Model (Multi-start)", fontsize=14)
                 fig.savefig(

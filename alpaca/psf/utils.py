@@ -550,10 +550,9 @@ def _print_multistart_chi2(summary: dict, prefix: str = "[Multi-start]") -> None
     """
     Print the best and minimum reduced chi-squared from a multi-start summary.
 
-    Reads the ``"best_chi2_red"``, ``"chi2_reds"``, ``"best_run"``, and
-    ``"total_optimizations"`` fields from the summary dictionary and prints
-    a formatted diagnostic line. Does nothing if the required fields are
-    missing or empty.
+    Reads the ``"best_chi2_red"`` and ``"chi2_reds"`` fields from the
+    summary dictionary and prints a formatted diagnostic line. Does
+    nothing if the required fields are missing or empty.
 
     Parameters
     ----------
@@ -567,31 +566,17 @@ def _print_multistart_chi2(summary: dict, prefix: str = "[Multi-start]") -> None
     best_chi2_direct = summary.get("best_chi2_red")
     chi2_reds = summary.get("chi2_reds", None)
 
-    if best_chi2_direct is not None and chi2_reds is not None:
+    if best_chi2_direct is not None:
+        print(f"{prefix} best chi2_red={best_chi2_direct:.3g}")
+        return
+
+    if chi2_reds is None:
+        return
+    try:
         chi2_arr = np.asarray(chi2_reds, dtype=float)
         if chi2_arr.size == 0:
             return
-        n_total = summary.get("total_optimizations", chi2_arr.size)
-        best_run = summary.get("best_run", int(np.nanargmin(chi2_arr)))
         min_chi2 = float(np.nanmin(chi2_arr))
-        print(f"{prefix} best chi2_red={best_chi2_direct:.3g} "
-              f"(min={min_chi2:.3g}, run {best_run}/{n_total})")
-        return
-
-    # Fallback: index into chi2_reds via best_run
-    try:
-        best_run = int(summary.get("best_run"))
-    except Exception:
-        best_run = None
-    if best_run is None or chi2_reds is None:
-        return
-    try:
-        chi2_arr = np.asarray(chi2_reds, dtype=float)
-        if chi2_arr.size == 0 or best_run < 0 or best_run >= chi2_arr.size:
-            return
-        best_chi2 = float(chi2_arr[best_run])
-        min_chi2 = float(np.nanmin(chi2_arr))
-        print(f"{prefix} best chi2_red={best_chi2:.3g} "
-              f"(min={min_chi2:.3g}, n={chi2_arr.size})")
+        print(f"{prefix} best chi2_red={min_chi2:.3g}")
     except Exception:
         return

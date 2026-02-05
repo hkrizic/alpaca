@@ -113,14 +113,8 @@ def main():
     if "multistart_summary" in results and results["multistart_summary"] is not None:
         ms_summary = results["multistart_summary"]
         print("\nMulti-start Optimization:")
-        print(f"  Number of starts: {ms_summary.get('n_starts', 'N/A')}")
-        print(f"  Best run: {ms_summary.get('best_run', 'N/A')}")
         print(f"  Best loss: {ms_summary.get('best_loss', 'N/A'):.4f}")
-
-        chi2_reds = ms_summary.get('chi2_reds', [])
-        if len(chi2_reds) > 0:
-            best_chi2 = chi2_reds[ms_summary.get('best_run', 0)]
-            print(f"  Best chi2_red: {best_chi2:.4f}")
+        print(f"  Best chi2_red: {ms_summary.get('best_chi2_red', 'N/A'):.4f}")
 
     # --- 5.3 Posterior Sampling Results ---
     if "posterior" in results and results["posterior"] is not None:

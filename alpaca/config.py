@@ -365,7 +365,6 @@ class PlottingConfig:
     # Model plots
     plot_model_summary: bool = True
     plot_residuals: bool = True
-
     # Sampling plots
     plot_corner: bool = True
     plot_chains: bool = True

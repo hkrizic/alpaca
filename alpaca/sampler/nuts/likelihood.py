@@ -1,9 +1,9 @@
 """NUTS log-density construction for Hamiltonian Monte Carlo sampling.
 
 Builds the NUTS log-density function combining imaging likelihood (via
-Herculens Loss), time-delay cosmography, ray-shooting consistency, and
-lens_gamma prior terms. Seeds the probabilistic model so that NumPyro's
-constrain_fn / unconstrain_fn can trace through it.
+Herculens Loss), time-delay cosmography, and ray-shooting consistency
+terms. Seeds the probabilistic model so that NumPyro's constrain_fn /
+unconstrain_fn can trace through it.
 
 author: hkrizic
 """
@@ -90,8 +90,8 @@ def build_nuts_logdensity(
     """Build the log-density closure used by NUTS sampling.
 
     This function seeds ``prob_model.model``, constructs the Herculens
-    ``Loss`` object, and assembles all additional likelihood / prior
-    terms (time-delay, ray-shooting consistency, lens_gamma prior).
+    ``Loss`` object, and assembles all additional likelihood terms
+    (time-delay, ray-shooting consistency).
 
     Parameters
     ----------
@@ -177,22 +177,13 @@ def build_nuts_logdensity(
         mass_model_rayshoot = lens_image.MassModel
 
     # ------------------------------------------------------------------
-    # Lens gamma prior setup
-    # ------------------------------------------------------------------
-    use_lens_gamma_normal_prior = config.lens_gamma_prior_type == "normal"
-    if use_lens_gamma_normal_prior:
-        lens_gamma_mu = jnp.asarray(best_params["lens_gamma"])
-        lens_gamma_sigma = jnp.asarray(config.lens_gamma_prior_sigma)
-        lens_gamma_sigma2 = lens_gamma_sigma ** 2
-
-    # ------------------------------------------------------------------
     # Log-density closure
     # ------------------------------------------------------------------
     def logdensity_fn(params_unconstrained):
         """Compute the total log-density for NUTS sampling.
 
-        Combines imaging likelihood, time-delay, ray-shooting consistency,
-        and lens_gamma prior terms into a single scalar log-density.
+        Combines imaging likelihood, time-delay, and ray-shooting
+        consistency terms into a single scalar log-density.
 
         Parameters
         ----------
@@ -248,12 +239,6 @@ def build_nuts_logdensity(
             else:
                 sigma2_total = sigma2_rayshoot_fixed
             ll = ll - 0.5 * jnp.sum(scatter) / sigma2_total
-        if use_lens_gamma_normal_prior:
-            if not (use_time_delays or use_rayshoot):
-                params_constrained = constrain_fn(seeded_model, (), {}, params_unconstrained)
-            lens_gamma_val = params_constrained["lens_gamma"]
-            ll_prior = -0.5 * (lens_gamma_val - lens_gamma_mu) ** 2 / lens_gamma_sigma2
-            ll = ll + ll_prior
         return ll
 
     return logdensity_fn, seeded_model, original_model

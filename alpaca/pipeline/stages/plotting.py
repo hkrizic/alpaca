@@ -165,10 +165,15 @@ def _generate_posterior_plots(
                 reconstructed = _reconstruct_params(sample_idx)
                 kwargs = prob_model.params2kwargs(reconstructed)
 
+                # For correlated fields, don't pass kwargs_grid_source so herculens
+                # uses the adaptive source grid with the configured num_pixels.
+                # For other models, use pixel_scale_factor=1 to match image resolution.
+                use_corr = getattr(prob_model, 'use_corr_fields', False)
+                kwargs_grid_src = None if use_corr else dict(pixel_scale_factor=1)
                 fig = plotter.model_summary(
                     lens_image, kwargs,
                     show_source=True,
-                    kwargs_grid_source=dict(pixel_scale_factor=1),
+                    kwargs_grid_source=kwargs_grid_src,
                 )
                 fig.suptitle(title, fontsize=14)
                 fig.savefig(
